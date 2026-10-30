@@ -34,11 +34,20 @@ export const VideoGrid: React.FC<Props> = ({
   onOpenAddModal,
   onScanNetwork,
 }) => {
-  const cellsCountMap: Record<GridLayout, number> = {
+  const cellsCountMap: Record<string, number> = {
     '1x1': 1,
     '2x2': 4,
     '3x3': 9,
     '4x4': 16,
+    '5x5': 25,
+    '6x6': 36,
+    '7x7': 49,
+    '8x8': 64,
+    '1+5': 6,
+    '1+7': 8,
+    '1+12': 13,
+    '2+8': 10,
+    '1+1+12': 14,
   };
   const count = cellsCountMap[layout];
   const visibleCells = cells.slice(0, count);

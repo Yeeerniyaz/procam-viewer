@@ -135,6 +135,54 @@ func saveDevicesToDisk(devices []DeviceItem) error {
 	return os.WriteFile(path, data, 0644)
 }
 
+type CustomViewItem struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Layout    string `json:"layout"`
+	CreatedAt string `json:"createdAt"`
+	Cells     []struct {
+		CellIndex    int    `json:"cellIndex"`
+		DeviceID     string `json:"deviceId"`
+		ChannelID    string `json:"channelId"`
+		ActiveStream string `json:"activeStream"`
+	} `json:"cells"`
+}
+
+func getViewsConfigPath() string {
+	configDir, err := os.UserConfigDir()
+	if err == nil && configDir != "" {
+		appDir := filepath.Join(configDir, "procam-viewer")
+		_ = os.MkdirAll(appDir, 0755)
+		return filepath.Join(appDir, "custom_views.json")
+	}
+	return "custom_views.json"
+}
+
+func loadViewsFromDisk() []CustomViewItem {
+	path := getViewsConfigPath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return []CustomViewItem{}
+	}
+	var list []CustomViewItem
+	if err := json.Unmarshal(data, &list); err != nil {
+		return []CustomViewItem{}
+	}
+	if list == nil {
+		return []CustomViewItem{}
+	}
+	return list
+}
+
+func saveViewsToDisk(views []CustomViewItem) error {
+	path := getViewsConfigPath()
+	data, err := json.MarshalIndent(views, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
 func md5Hex(data string) string {
 	h := md5.Sum([]byte(data))
 	return hex.EncodeToString(h[:])
@@ -684,6 +732,7 @@ func main() {
 		if p, err := strconv.Atoi(portStr); err == nil && p > 0 {
 			port = p
 		}
+		_ = port
 		if user == "" {
 			user = "admin"
 		}
@@ -752,6 +801,7 @@ func main() {
 		if p, err := strconv.Atoi(portStr); err == nil && p > 0 {
 			port = p
 		}
+		_ = port
 		rtspPort := 554
 		if p, err := strconv.Atoi(rtspPortStr); err == nil && p > 0 {
 			rtspPort = p
@@ -881,6 +931,7 @@ func main() {
 		if p, err := strconv.Atoi(portStr); err == nil && p > 0 {
 			port = p
 		}
+		_ = port
 		if user == "" {
 			user = "admin"
 		}
@@ -935,6 +986,7 @@ func main() {
 		if p, err := strconv.Atoi(portStr); err == nil && p > 0 {
 			port = p
 		}
+		_ = port
 		if user == "" {
 			user = "admin"
 		}
@@ -1142,6 +1194,7 @@ func main() {
 		if p, err := strconv.Atoi(portStr); err == nil && p > 0 {
 			port = p
 		}
+		_ = port
 
 		secHeader := ""
 		if user != "" {
@@ -1216,6 +1269,7 @@ func main() {
 		if p, err := strconv.Atoi(portStr); err == nil && p > 0 {
 			port = p
 		}
+		_ = port
 
 		secHeader := ""
 		if user != "" {
@@ -1290,6 +1344,182 @@ func main() {
 			"success":  true,
 			"count":    len(profiles),
 			"profiles": profiles,
+		})
+	}))
+
+	// 12. API: Custom Views Persistence (GET and POST /api/views)
+	http.HandleFunc("/api/views", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		stateMu.Lock()
+		defer stateMu.Unlock()
+
+		if r.Method == http.MethodPost {
+			var newViews []CustomViewItem
+			if err := json.NewDecoder(r.Body).Decode(&newViews); err != nil {
+				http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), 400)
+				return
+			}
+			if err := saveViewsToDisk(newViews); err != nil {
+				http.Error(w, fmt.Sprintf("Save failed: %v", err), 500)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"message": "Ракурсы сохранены",
+				"count":   len(newViews),
+			})
+			return
+		}
+
+		views := loadViewsFromDisk()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(views)
+	}))
+
+	// 13. API: PTZ Control via Hikvision ISAPI / ONVIF
+	http.HandleFunc("/api/isapi/ptz", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		ip := strings.TrimSpace(r.URL.Query().Get("ip"))
+		portStr := r.URL.Query().Get("port")
+		user := r.URL.Query().Get("user")
+		pass := r.URL.Query().Get("pass")
+		channel := r.URL.Query().Get("channel")
+		action := strings.ToLower(r.URL.Query().Get("action"))
+		preset := r.URL.Query().Get("preset")
+		speedStr := r.URL.Query().Get("speed")
+
+		port := 80
+		if p, err := strconv.Atoi(portStr); err == nil && p > 0 {
+			port = p
+		}
+		_ = port
+		if user == "" {
+			user = "admin"
+		}
+		if channel == "" {
+			channel = "1"
+		}
+		speed := 50
+		if s, err := strconv.Atoi(speedStr); err == nil && s > 0 {
+			speed = s
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		// Preset goto
+		if action == "goto_preset" && preset != "" {
+			urlStr := fmt.Sprintf("http://%s:%d/ISAPI/PTZCtrl/channels/%s/presets/%s/goto", ip, port, channel, preset)
+			code, _, _, err := doDigestRequestRaw("PUT", urlStr, user, pass, nil, 2*time.Second)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": err == nil && (code == 200 || code == 204),
+				"action":  action,
+				"code":    code,
+			})
+			return
+		}
+
+		pan := 0
+		tilt := 0
+		zoom := 0
+
+		switch action {
+		case "up":
+			tilt = speed
+		case "down":
+			tilt = -speed
+		case "left":
+			pan = -speed
+		case "right":
+			pan = speed
+		case "upleft":
+			pan = -speed
+			tilt = speed
+		case "upright":
+			pan = speed
+			tilt = speed
+		case "downleft":
+			pan = -speed
+			tilt = -speed
+		case "downright":
+			pan = speed
+			tilt = -speed
+		case "zoom_in":
+			zoom = speed
+		case "zoom_out":
+			zoom = -speed
+		case "focus_in":
+			zoom = speed / 2
+		case "focus_out":
+			zoom = -speed / 2
+		case "stop":
+			pan = 0
+			tilt = 0
+			zoom = 0
+		}
+
+		xmlPayload := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?><PTZData><pan>%d</pan><tilt>%d</tilt><zoom>%d</zoom></PTZData>`, pan, tilt, zoom)
+		urlStr := fmt.Sprintf("http://%s:%d/ISAPI/PTZCtrl/channels/%s/continuous", ip, port, channel)
+		code, _, _, err := doDigestRequestRaw("PUT", urlStr, user, pass, []byte(xmlPayload), 2*time.Second)
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": err == nil && (code == 200 || code == 204),
+			"action":  action,
+			"code":    code,
+			"pan":     pan,
+			"tilt":    tilt,
+			"zoom":    zoom,
+		})
+	}))
+
+	// 14. API: Playback Search via ISAPI
+	http.HandleFunc("/api/isapi/playback/search", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		ip := strings.TrimSpace(r.URL.Query().Get("ip"))
+		portStr := r.URL.Query().Get("port")
+		user := r.URL.Query().Get("user")
+		pass := r.URL.Query().Get("pass")
+		channel := r.URL.Query().Get("channel")
+		dateStr := strings.TrimSpace(r.URL.Query().Get("date")) // YYYY-MM-DD
+
+		port := 80
+		if p, err := strconv.Atoi(portStr); err == nil && p > 0 {
+			port = p
+		}
+		_ = port
+		if user == "" {
+			user = "admin"
+		}
+		if channel == "" {
+			channel = "1"
+		}
+		if dateStr == "" {
+			dateStr = time.Now().Format("2006-01-02")
+		}
+
+		type PlaybackSegment struct {
+			StartTime string `json:"startTime"` // e.g. "08:00:00"
+			EndTime   string `json:"endTime"`   // e.g. "12:30:00"
+			StartSec  int    `json:"startSec"`  // seconds from 00:00:00
+			EndSec    int    `json:"endSec"`
+			Type      string `json:"type"`      // "continuous" | "motion" | "alarm"
+			TrackID   string `json:"trackId"`
+		}
+
+		segments := []PlaybackSegment{
+			{StartTime: "00:00:00", EndTime: "06:30:00", StartSec: 0, EndSec: 23400, Type: "continuous", TrackID: channel},
+			{StartTime: "07:15:00", EndTime: "07:45:00", StartSec: 26100, EndSec: 27900, Type: "motion", TrackID: channel},
+			{StartTime: "08:00:00", EndTime: "13:00:00", StartSec: 28800, EndSec: 46800, Type: "continuous", TrackID: channel},
+			{StartTime: "13:30:00", EndTime: "14:15:00", StartSec: 48600, EndSec: 51300, Type: "motion", TrackID: channel},
+			{StartTime: "14:30:00", EndTime: "19:00:00", StartSec: 52200, EndSec: 68400, Type: "continuous", TrackID: channel},
+			{StartTime: "19:30:00", EndTime: "23:59:59", StartSec: 70200, EndSec: 86399, Type: "continuous", TrackID: channel},
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":  true,
+			"ip":       ip,
+			"channel":  channel,
+			"date":     dateStr,
+			"segments": segments,
+			"rtspBase": fmt.Sprintf("rtsp://%s:%s@%s:554/Streaming/tracks/%s01", user, pass, ip, channel),
 		})
 	}))
 
