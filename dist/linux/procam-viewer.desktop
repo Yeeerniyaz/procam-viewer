@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=4.1
+Type=Application
+Name=ProCam Viewer
+GenericName=Просмотр и диагностика IP-камер (RTSP/ONVIF)
+Comment=Инженерный мультиэкранный комплекс просмотра и диагностики видеопотоков IP-камер и NVR ProCam
+Exec=/usr/local/bin/ProCamViewer_Linux_x64
+Icon=/usr/share/pixmaps/procam-viewer.png
+Terminal=false
+Categories=Network;Utility;Security;AudioVideo;Video;
+StartupWMClass=ProCamViewer

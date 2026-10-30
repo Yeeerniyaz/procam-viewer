@@ -1,0 +1,35 @@
+{
+  "name": "ProCam Viewer",
+  "version": "4.1.0",
+  "tag": "v4.1.0",
+  "released_at": "2026-10-30",
+  "repo_url": "https://github.com/Yeeerniyaz/procam-viewer",
+  "windows": {
+    "filename": "ProCamViewer_Windows_x64.exe",
+    "size": "8.2 MB",
+    "arch": "Windows 10 / 11 (x64)",
+    "url": "https://github.com/Yeeerniyaz/procam-viewer/releases/latest/download/ProCamViewer_Windows_x64.exe",
+    "fallback_url": "/downloads/ProCamViewer_Windows_x64.exe"
+  },
+  "linux": {
+    "filename": "ProCamViewer_Linux_x64",
+    "size": "8.0 MB",
+    "arch": "Linux Desktop (x64)",
+    "url": "https://github.com/Yeeerniyaz/procam-viewer/releases/latest/download/ProCamViewer_Linux_x64",
+    "fallback_url": "/downloads/ProCamViewer_Linux_x64",
+    "install_cmd": "curl -fsSL https://raw.githubusercontent.com/Yeeerniyaz/procam-viewer/main/dist/linux/install.sh | sudo bash"
+  },
+  "manual": {
+    "filename": "PROCAM_VIEWER_MANUAL_RU.pdf",
+    "size": "85 KB",
+    "url": "https://raw.githubusercontent.com/Yeeerniyaz/procam-viewer/main/PROCAM_VIEWER_MANUAL_RU.pdf",
+    "fallback_url": "/downloads/PROCAM_VIEWER_MANUAL_RU.pdf"
+  },
+  "changelog": [
+    "Мультиэкранный плеер видеопотоков IP-камер и NVR (раскладки 1x1, 2x2, 3x3, 4x4, полноэкранный режим)",
+    "Мгновенное переключение основного (Main Stream) и субпотока (Sub Stream) для каждой камеры с экономией битрейта",
+    "Захват моментальных снимков (JPEG/PNG) и перезапуск RTSP-потоков с фиксацией в журнале",
+    "Инженерная диагностика потока: кодек H.264/H.265+, разрешение, FPS, битрейт, порты ONVIF/RTSP, пинг и джиттер",
+    "Встроенный сканер сети (Hikvision SADP, Dahua, ONVIF WS-Discovery) и одновременная работа Wi-Fi и кабеля (/32 маршруты)"
+  ]
+}

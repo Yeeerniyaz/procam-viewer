@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+ProCam Viewer v4.1 — Fallback Tkinter Native Linux GUI
+"""
+import os
+import sys
+import subprocess
+
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+BIN_LINUX = os.path.join(SCRIPT_DIR, "ProCamViewer_Linux_x64")
+
+def main():
+    if os.path.isfile(BIN_LINUX) and os.access(BIN_LINUX, os.X_OK):
+        os.execv(BIN_LINUX, [BIN_LINUX] + sys.argv[1:])
+
+    try:
+        import tkinter as tk
+        from tkinter import ttk, messagebox
+    except ImportError:
+        print("[!] Tkinter не установлен.")
+        sys.exit(1)
+
+    root = tk.Tk()
+    root.title("ProCam Viewer v4.1 — Fallback GUI")
+    root.geometry("600x400")
+    root.configure(bg="#0b0d12")
+
+    label = tk.Label(
+        root,
+        text="PROCAM VIEWER v4.1",
+        fg="#10B981",
+        bg="#0b0d12",
+        font=("Helvetica", 16, "bold"),
+    )
+    label.pack(pady=30)
+
+    sub = tk.Label(
+        root,
+        text="СИСТЕМЫ ВИДЕОНАБЛЮДЕНИЯ · ИНЖЕНЕРНЫЙ КОМПЛЕКС\nМультиэкранный комплекс мониторинга и диагностики IP-камер",
+        fg="#A1A1AA",
+        bg="#0b0d12",
+        font=("Helvetica", 10),
+    )
+    sub.pack(pady=10)
+
+    def launch():
+        if os.path.isfile(BIN_LINUX):
+            subprocess.Popen([BIN_LINUX])
+            root.destroy()
+        else:
+            messagebox.showinfo("ProCam Viewer", "Скомпилируйте приложение с помощью 'bash scripts/build-native.sh'")
+
+    btn = tk.Button(
+        root,
+        text="Запустить ProCam Viewer",
+        bg="#10B981",
+        fg="#09090B",
+        font=("Helvetica", 11, "bold"),
+        padx=20,
+        pady=8,
+        relief="flat",
+        command=launch,
+    )
+    btn.pack(pady=40)
+
+    root.mainloop()
+
+if __name__ == "__main__":
+    main()
