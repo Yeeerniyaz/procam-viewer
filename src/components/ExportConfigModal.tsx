@@ -1,15 +1,15 @@
 import React, { useState } from 'react';
-import { CameraStreamItem, GridLayout } from '../types';
+import { DeviceItem, GridLayout } from '../types';
 import { X, Copy, Download, Check, ListMusic } from 'lucide-react';
 
 interface Props {
   isOpen: boolean;
   onClose: () => void;
-  cameras: CameraStreamItem[];
+  devices: DeviceItem[];
   layout: GridLayout;
 }
 
-export const ExportConfigModal: React.FC<Props> = ({ isOpen, onClose, cameras, layout }) => {
+export const ExportConfigModal: React.FC<Props> = ({ isOpen, onClose, devices, layout }) => {
   if (!isOpen) return null;
 
   const [copied, setCopied] = useState(false);
@@ -19,22 +19,29 @@ export const ExportConfigModal: React.FC<Props> = ({ isOpen, onClose, cameras, l
     version: '4.1.0',
     exported_at: new Date().toISOString(),
     layout: layout,
-    cameras_count: cameras.length,
-    cameras: cameras.map((c) => ({
-      id: c.id,
-      name: c.name,
-      ip: c.ip,
-      mac: c.mac,
-      vendor: c.vendor,
-      model: c.model,
-      device_type: c.device_type,
-      codec: c.codec,
-      resolution: c.resolution,
-      fps: c.fps,
-      bitrate_kbps: c.bitrate_kbps,
-      active_stream: c.active_stream,
-      rtsp_main: c.rtsp_main,
-      rtsp_sub: c.rtsp_sub,
+    devices_count: devices.length,
+    devices: devices.map((d) => ({
+      id: d.id,
+      name: d.name,
+      type: d.type,
+      protocol: d.protocol,
+      ip: d.ip,
+      httpPort: d.httpPort,
+      rtspPort: d.rtspPort,
+      login: d.login,
+      channelsCount: d.channelsCount,
+      model: d.model,
+      serial: d.serial,
+      firmware: d.firmware,
+      channels: d.channels.map((ch) => ({
+        channelNumber: ch.channelNumber,
+        name: ch.name,
+        enabled: ch.enabled,
+        rtspMain: ch.rtspMain,
+        rtspSub: ch.rtspSub,
+        resolution: ch.resolution,
+        codec: ch.codec,
+      })),
     })),
   };
 
@@ -58,9 +65,12 @@ export const ExportConfigModal: React.FC<Props> = ({ isOpen, onClose, cameras, l
 
   const handleDownloadM3U = () => {
     let m3u = '#EXTM3U\n';
-    cameras.forEach((c) => {
-      m3u += `#EXTINF:-1 group-title="${c.zone}" tvg-name="${c.name}", ${c.name} (${c.vendor})\n`;
-      m3u += `${c.active_stream === 'main' ? c.rtsp_main : c.rtsp_sub}\n`;
+    devices.forEach((d) => {
+      d.channels.forEach((ch) => {
+        if (!ch.enabled) return;
+        m3u += `#EXTINF:-1 group-title="${d.name}" tvg-name="${ch.name}", ${d.name} - ${ch.name}\n`;
+        m3u += `${ch.rtspMain}\n`;
+      });
     });
 
     const blob = new Blob([m3u], { type: 'audio/x-mpegurl' });
@@ -76,11 +86,20 @@ export const ExportConfigModal: React.FC<Props> = ({ isOpen, onClose, cameras, l
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-window" style={{ maxWidth: '720px' }} onClick={(e) => e.stopPropagation()}>
         {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)', paddingBottom: '14px', marginBottom: '16px' }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            borderBottom: '1px solid var(--border)',
+            paddingBottom: '14px',
+            marginBottom: '16px',
+          }}
+        >
           <div>
             <span className="eyebrow">// ЭКСПОРТ КОНФИГУРАЦИИ</span>
             <h3 style={{ fontSize: '18px', fontWeight: 800, marginTop: '2px' }}>
-              Экспорт камер, профилей потоков и раскладки
+              Экспорт устройств, каналов NVR и плейлиста RTSP
             </h3>
           </div>
           <button className="btn-pill" style={{ padding: '6px' }} onClick={onClose}>
@@ -92,7 +111,7 @@ export const ExportConfigModal: React.FC<Props> = ({ isOpen, onClose, cameras, l
         <div style={{ marginBottom: '16px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
             <span style={{ fontSize: '11px', color: 'var(--muted)', fontWeight: 600 }}>
-              Формат JSON (резервная копия и перенос на другой ПК):
+              Формат JSON (для переноса между ПК и резервного копирования):
             </span>
             <button
               onClick={handleCopy}
@@ -100,15 +119,15 @@ export const ExportConfigModal: React.FC<Props> = ({ isOpen, onClose, cameras, l
                 background: 'transparent',
                 border: 'none',
                 color: copied ? 'var(--emerald)' : 'var(--muted)',
-                fontSize: '11.5px',
+                fontSize: '11px',
                 cursor: 'pointer',
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '4px',
               }}
             >
-              {copied ? <Check size={13} /> : <Copy size={13} />}
-              {copied ? 'Скопировано!' : 'Скопировать JSON'}
+              {copied ? <Check size={12} /> : <Copy size={12} />}
+              {copied ? 'Скопировано!' : 'Копировать JSON'}
             </button>
           </div>
 
@@ -123,29 +142,35 @@ export const ExportConfigModal: React.FC<Props> = ({ isOpen, onClose, cameras, l
               overflowY: 'auto',
               fontSize: '11px',
               lineHeight: 1.5,
-              color: '#34D399',
+              color: '#A1A1AA',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
             }}
           >
             {jsonString}
           </pre>
         </div>
 
-        {/* Footer Actions */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
-          <button className="btn-pill" onClick={handleDownloadM3U} title="Экспорт плейлиста для VLC / PotPlayer">
-            <ListMusic size={14} color="#60A5FA" />
-            Экспорт плейлиста VLC (M3U8)
+        {/* Action Buttons */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+          <button
+            className="btn-pill"
+            style={{ padding: '8px 16px', fontSize: '12.5px' }}
+            onClick={handleDownloadM3U}
+            title="Экспорт в универсальный плейлист VLC / PotPlayer / IPTV"
+          >
+            <ListMusic size={14} color="var(--emerald)" />
+            Скачать M3U8 (VLC / IPTV)
           </button>
 
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <button className="btn-pill" onClick={onClose}>
-              Закрыть
-            </button>
-            <button className="btn-pill btn-pill-primary" onClick={handleDownloadJSON}>
-              <Download size={14} />
-              Скачать JSON
-            </button>
-          </div>
+          <button
+            className="btn-pill btn-pill-primary"
+            style={{ padding: '8px 18px', fontSize: '12.5px' }}
+            onClick={handleDownloadJSON}
+          >
+            <Download size={14} />
+            Скачать procam_config.json
+          </button>
         </div>
       </div>
     </div>

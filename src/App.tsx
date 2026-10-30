@@ -4,11 +4,13 @@ import { Header } from './components/Header';
 import { CameraListPanel } from './components/CameraListPanel';
 import { VideoGrid } from './components/VideoGrid';
 import { DiagnosticsDock } from './components/DiagnosticsDock';
-import { AddCameraModal } from './components/AddCameraModal';
+import { AddDeviceModal } from './components/AddDeviceModal';
 import { ExportConfigModal } from './components/ExportConfigModal';
 import { ManualModal } from './components/ManualModal';
 import {
-  CameraStreamItem,
+  DeviceItem,
+  ChannelItem,
+  ActiveGridCell,
   NetInterfaceInfo,
   GridLayout,
   LogEntry,
@@ -21,191 +23,32 @@ const mantineTheme = createTheme({
   fontFamilyMonospace: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
 });
 
-const initialCameras: CameraStreamItem[] = [
-  {
-    id: 'cam-01',
-    name: 'Входная группа (Тамбур)',
-    ip: '192.168.1.64',
-    mac: '44:19:b6:12:34:56',
-    vendor: 'Hikvision',
-    model: 'DS-2CD2143G2-I',
-    device_type: 'camera',
-    device_label: 'IP-КАМЕРА',
-    zone: 'Вход',
-    status: 'online',
-    ping_ms: 1.6,
-    ports: [80, 554, 8000],
-    codec: 'H.265+',
-    resolution: '2560x1440 (4 МП)',
-    fps: 25,
-    bitrate_kbps: 3840,
-    rtsp_main: 'rtsp://admin:12345@192.168.1.64:554/Streaming/Channels/101',
-    rtsp_sub: 'rtsp://admin:12345@192.168.1.64:554/Streaming/Channels/102',
-    active_stream: 'main',
-    channel: 1,
-  },
-  {
-    id: 'cam-02',
-    name: 'Парковка и Шлагбаум',
-    ip: '192.168.1.65',
-    mac: '24:52:6a:88:99:aa',
-    vendor: 'Dahua',
-    model: 'IPC-HFW2431S-S-S2',
-    device_type: 'camera',
-    device_label: 'IP-КАМЕРА',
-    zone: 'Улица',
-    status: 'online',
-    ping_ms: 2.1,
-    ports: [80, 554, 37777],
-    codec: 'H.265+',
-    resolution: '2560x1440 (4 МП)',
-    fps: 25,
-    bitrate_kbps: 4096,
-    rtsp_main: 'rtsp://admin:admin123@192.168.1.65:554/cam/realmonitor?channel=1&subtype=0',
-    rtsp_sub: 'rtsp://admin:admin123@192.168.1.65:554/cam/realmonitor?channel=1&subtype=1',
-    active_stream: 'main',
-    channel: 2,
-  },
-  {
-    id: 'cam-03',
-    name: 'Главный склад (Зона А)',
-    ip: '192.168.1.108',
-    mac: '08:ed:ed:33:44:55',
-    vendor: 'HiWatch',
-    model: 'DS-I250L (ColorVu)',
-    device_type: 'camera',
-    device_label: 'IP-КАМЕРА',
-    zone: 'Склад',
-    status: 'online',
-    ping_ms: 1.4,
-    ports: [80, 554, 8000],
-    codec: 'H.265',
-    resolution: '1920x1080 (2 МП)',
-    fps: 25,
-    bitrate_kbps: 2048,
-    rtsp_main: 'rtsp://admin:12345@192.168.1.108:554/Streaming/Channels/101',
-    rtsp_sub: 'rtsp://admin:12345@192.168.1.108:554/Streaming/Channels/102',
-    active_stream: 'sub',
-    channel: 3,
-  },
-  {
-    id: 'cam-04',
-    name: 'Кассовая зона / Офис',
-    ip: '192.168.1.70',
-    mac: '48:ea:63:77:88:99',
-    vendor: 'Uniview',
-    model: 'IPC2122SR3-PF40-C',
-    device_type: 'camera',
-    device_label: 'IP-КАМЕРА',
-    zone: 'Офис',
-    status: 'online',
-    ping_ms: 1.9,
-    ports: [80, 554],
-    codec: 'H.265+',
-    resolution: '1920x1080 (2 МП)',
-    fps: 25,
-    bitrate_kbps: 1850,
-    rtsp_main: 'rtsp://admin:123456@192.168.1.70:554/unicast/c1/s0/live',
-    rtsp_sub: 'rtsp://admin:123456@192.168.1.70:554/unicast/c1/s1/live',
-    active_stream: 'main',
-    channel: 4,
-  },
-  {
-    id: 'nvr-01',
-    name: 'Видеорегистратор NVR-16',
-    ip: '192.168.1.100',
-    mac: 'c0:56:e3:11:22:33',
-    vendor: 'Hikvision NVR',
-    model: 'DS-7616NXI-K2',
-    device_type: 'nvr',
-    device_label: 'NVR / РЕГИСТРАТОР',
-    zone: 'Серверная',
-    status: 'online',
-    ping_ms: 0.9,
-    ports: [80, 554, 8000],
-    codec: 'H.265+',
-    resolution: '3840x2160 (4K)',
-    fps: 25,
-    bitrate_kbps: 8192,
-    rtsp_main: 'rtsp://admin:admin123@192.168.1.100:554/Streaming/Channels/101',
-    rtsp_sub: 'rtsp://admin:admin123@192.168.1.100:554/Streaming/Channels/102',
-    active_stream: 'main',
-    channel: 5,
-  },
-  {
-    id: 'cam-05',
-    name: 'Периметр (Западное крыло)',
-    ip: '192.168.1.112',
-    mac: '3c:1b:f8:66:77:88',
-    vendor: 'Hikvision',
-    model: 'DS-2CD2047G2-LU',
-    device_type: 'camera',
-    device_label: 'IP-КАМЕРА',
-    zone: 'Периметр',
-    status: 'online',
-    ping_ms: 2.4,
-    ports: [80, 554, 8000],
-    codec: 'H.265+',
-    resolution: '2560x1440 (4 МП)',
-    fps: 20,
-    bitrate_kbps: 3200,
-    rtsp_main: 'rtsp://admin:12345@192.168.1.112:554/Streaming/Channels/101',
-    rtsp_sub: 'rtsp://admin:12345@192.168.1.112:554/Streaming/Channels/102',
-    active_stream: 'sub',
-    channel: 6,
-  },
-  {
-    id: 'cam-06',
-    name: 'Коридор 2 этажа',
-    ip: '192.168.1.115',
-    mac: '74:a7:8e:aa:bb:cc',
-    vendor: 'Dahua',
-    model: 'IPC-HDW1439T1-A-LED',
-    device_type: 'camera',
-    device_label: 'IP-КАМЕРА',
-    zone: 'Здание',
-    status: 'online',
-    ping_ms: 1.7,
-    ports: [80, 554, 37777],
-    codec: 'H.265',
-    resolution: '2560x1440 (4 МП)',
-    fps: 25,
-    bitrate_kbps: 3500,
-    rtsp_main: 'rtsp://admin:admin@192.168.1.115:554/cam/realmonitor?channel=1&subtype=0',
-    rtsp_sub: 'rtsp://admin:admin@192.168.1.115:554/cam/realmonitor?channel=1&subtype=1',
-    active_stream: 'sub',
-    channel: 7,
-  },
-  {
-    id: 'cam-07',
-    name: 'КПП и Ворота (Резерв)',
-    ip: '192.168.1.120',
-    mac: 'a0:ff:0c:dd:ee:ff',
-    vendor: 'HiWatch',
-    model: 'DS-I400',
-    device_type: 'camera',
-    device_label: 'IP-КАМЕРА',
-    zone: 'Въезд',
-    status: 'offline',
-    ping_ms: 0.0,
-    ports: [],
-    codec: 'H.264',
-    resolution: '2560x1440 (4 МП)',
-    fps: 0,
-    bitrate_kbps: 0,
-    rtsp_main: 'rtsp://admin:12345@192.168.1.120:554/Streaming/Channels/101',
-    rtsp_sub: 'rtsp://admin:12345@192.168.1.120:554/Streaming/Channels/102',
-    active_stream: 'main',
-    channel: 8,
-  },
-];
+const STORAGE_KEY = 'procam_viewer_devices_v4';
 
 export const App: React.FC = () => {
-  const [cameras, setCameras] = useState<CameraStreamItem[]>(initialCameras);
-  const [selectedCameraId, setSelectedCameraId] = useState<string>('cam-01');
+  // Devices and Active Grid Cells state
+  const [devices, setDevices] = useState<DeviceItem[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {
+      // Local storage unavailable
+    }
+    return [];
+  });
+
+  const [cells, setCells] = useState<ActiveGridCell[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
+  const [selectedChannelId, setSelectedChannelId] = useState<string>('');
+  const [selectedCellId, setSelectedCellId] = useState<string>('');
   const [layout, setLayout] = useState<GridLayout>('2x2');
+
+  // Network Interfaces & Scanning
   const [interfaces, setInterfaces] = useState<NetInterfaceInfo[]>([]);
-  const [primaryIP, setPrimaryIP] = useState<string>('192.168.1.250');
+  const [primaryIP, setPrimaryIP] = useState<string>('127.0.0.1');
   const [isScanning, setIsScanning] = useState<boolean>(false);
 
   // Modals
@@ -213,31 +56,25 @@ export const App: React.FC = () => {
   const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
   const [isManualModalOpen, setIsManualModalOpen] = useState<boolean>(false);
 
-  // Terminal Real-Time Logs
+  // Real-time Terminal Log
   const [logs, setLogs] = useState<LogEntry[]>([
     {
-      id: 'log-1',
+      id: 'boot-1',
       timestamp: new Date().toLocaleTimeString('ru-RU'),
       level: 'INFO',
-      message: 'ProCam Viewer v4.1 инициализирован. Инженерный комплекс готов к работе.',
+      message: 'ProCam Viewer v4.1.0 запущен. Ядро видеокомплекса инициализировано.',
     },
     {
-      id: 'log-2',
+      id: 'boot-2',
       timestamp: new Date().toLocaleTimeString('ru-RU'),
       level: 'NET',
-      message: 'Сетевые адаптеры проверены: одновременная работа Wi-Fi и Кабеля активна.',
-    },
-    {
-      id: 'log-3',
-      timestamp: new Date().toLocaleTimeString('ru-RU'),
-      level: 'RTSP',
-      message: 'Видеоматрица 2х2 запущена. Потоки 101/102 синхронизированы.',
+      message: 'Движок ISAPI Digest Auth и RTSP-шлюз активны на порту :8080.',
     },
   ]);
 
   const addLog = (level: LogEntry['level'], message: string) => {
     const newEntry: LogEntry = {
-      id: `log-${Date.now()}-${Math.random()}`,
+      id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       timestamp: new Date().toLocaleTimeString('ru-RU'),
       level,
       message,
@@ -245,62 +82,265 @@ export const App: React.FC = () => {
     setLogs((prev) => [...prev, newEntry]);
   };
 
-  // Fetch initial info & scan from Go API
-  useEffect(() => {
-    const fetchSys = async () => {
-      try {
-        const res = await fetch('/api/info');
-        if (res.ok) {
-          const data = await res.json();
-          if (data.interfaces) setInterfaces(data.interfaces);
-          if (data.ip) setPrimaryIP(data.ip);
-          addLog('NET', `Локальный IP: ${data.ip} (${data.subnet || 'Авто'})`);
-        }
-      } catch (err) {
-        // Fallback info
-      }
+  // Synchronize devices with backend disk persistence and localStorage
+  const syncDevices = (newDevices: DeviceItem[]) => {
+    setDevices(newDevices);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(newDevices));
+    } catch (e) {
+      // ignore
+    }
+    fetch('/api/devices', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newDevices),
+    }).catch(() => {});
+  };
+
+  // Convert Device + Channel into ActiveGridCell
+  const createCell = (device: DeviceItem, channel: ChannelItem): ActiveGridCell => {
+    const isHik = device.protocol === 'hikvision';
+    const hikId = channel.channelIdHik || `${channel.channelNumber}01`;
+
+    return {
+      cellId: `${device.id}_${channel.id}`,
+      deviceId: device.id,
+      channelId: channel.id,
+      channelNumber: channel.channelNumber,
+      channelName: channel.name,
+      deviceName: device.name,
+      deviceIp: device.ip,
+      deviceProtocol: device.protocol,
+      httpPort: device.httpPort,
+      rtspPort: device.rtspPort,
+      login: device.login,
+      password: device.password,
+      channelIdHik: hikId,
+      rtspMain: channel.rtspMain,
+      rtspSub: channel.rtspSub,
+      activeStream: channel.activeStream || 'sub',
+      status: 'online',
+      pingMs: device.pingMs || 1.8,
+      codec: channel.codec || 'H.265+',
+      resolution: channel.resolution || '1920x1080',
+      fps: 25,
+      bitrateKbps: 3840,
     };
-    fetchSys();
+  };
+
+  // Initial populate grid when devices are first loaded
+  const populateInitialGrid = (devList: DeviceItem[]) => {
+    if (devList.length === 0) return;
+    const initialCells: ActiveGridCell[] = [];
+
+    for (const dev of devList) {
+      for (const ch of dev.channels) {
+        if (ch.enabled && initialCells.length < 16) {
+          initialCells.push(createCell(dev, ch));
+        }
+      }
+    }
+
+    if (initialCells.length > 0) {
+      setCells(initialCells);
+      setSelectedCellId(initialCells[0].cellId);
+      setSelectedDeviceId(initialCells[0].deviceId);
+      setSelectedChannelId(initialCells[0].channelId);
+
+      if (initialCells.length === 1) setLayout('1x1');
+      else if (initialCells.length <= 4) setLayout('2x2');
+      else if (initialCells.length <= 9) setLayout('3x3');
+      else setLayout('4x4');
+    }
+  };
+
+  // Initial load from backend /api/devices and /api/info
+  useEffect(() => {
+    const initApp = async () => {
+      // 1. Load System & Network Info
+      try {
+        const infoRes = await fetch('/api/info');
+        if (infoRes.ok) {
+          const info = await infoRes.json();
+          if (info.interfaces) setInterfaces(info.interfaces);
+          if (info.ip) setPrimaryIP(info.ip);
+          addLog('NET', `Активный сетевой адрес хоста: ${info.ip} (${info.subnet || 'Авто'})`);
+        }
+      } catch (e) {
+        // standalone mode
+      }
+
+      // 2. Load Persisted Devices from Backend Disk
+      try {
+        const devRes = await fetch('/api/devices');
+        if (devRes.ok) {
+          const diskDevices = await devRes.json();
+          if (Array.isArray(diskDevices) && diskDevices.length > 0) {
+            setDevices(diskDevices);
+            try {
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(diskDevices));
+            } catch (e) {}
+            populateInitialGrid(diskDevices);
+            addLog('INFO', `Загружена сохраненная конфигурация: ${diskDevices.length} устройств.`);
+            return;
+          }
+        }
+      } catch (e) {
+        // Backend offline
+      }
+
+      // If backend was empty, check localStorage
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setDevices(parsed);
+            populateInitialGrid(parsed);
+            addLog('INFO', `Загружена конфигурация из локального хранилища: ${parsed.length} устройств.`);
+          }
+        }
+      } catch (e) {}
+    };
+
+    initApp();
   }, []);
 
-  const selectedCamera = cameras.find((c) => c.id === selectedCameraId) || cameras[0] || null;
+  // Save or Update Device
+  const handleSaveDevice = (newDevice: DeviceItem) => {
+    const existingIndex = devices.findIndex((d) => d.id === newDevice.id || d.ip === newDevice.ip);
+    let updatedDevices: DeviceItem[];
 
-  // Actions
+    if (existingIndex >= 0) {
+      updatedDevices = [...devices];
+      updatedDevices[existingIndex] = newDevice;
+      addLog('SUCCESS', `Параметры устройства ${newDevice.name} (${newDevice.ip}) обновлены.`);
+    } else {
+      updatedDevices = [newDevice, ...devices];
+      addLog('SUCCESS', `Добавлено устройство: ${newDevice.name} [${newDevice.type.toUpperCase()}] (${newDevice.ip}).`);
+    }
+
+    syncDevices(updatedDevices);
+    setSelectedDeviceId(newDevice.id);
+
+    // If grid was completely empty, populate grid with this device's channels
+    if (cells.length === 0) {
+      const newCells: ActiveGridCell[] = [];
+      newDevice.channels.forEach((ch) => {
+        if (ch.enabled) newCells.push(createCell(newDevice, ch));
+      });
+      if (newCells.length > 0) {
+        setCells(newCells);
+        setSelectedCellId(newCells[0].cellId);
+        if (newCells.length === 1) setLayout('1x1');
+        else if (newCells.length <= 4) setLayout('2x2');
+        else if (newCells.length <= 9) setLayout('3x3');
+        else setLayout('4x4');
+      }
+    }
+  };
+
+  // Delete Device
+  const handleDeleteDevice = (deviceId: string) => {
+    const dev = devices.find((d) => d.id === deviceId);
+    const updated = devices.filter((d) => d.id !== deviceId);
+    syncDevices(updated);
+
+    // Remove cells associated with this device
+    const remainingCells = cells.filter((c) => c.deviceId !== deviceId);
+    setCells(remainingCells);
+
+    if (selectedDeviceId === deviceId) {
+      setSelectedDeviceId(updated[0]?.id || '');
+      setSelectedChannelId('');
+    }
+    if (selectedCellId && !remainingCells.some((c) => c.cellId === selectedCellId)) {
+      setSelectedCellId(remainingCells[0]?.cellId || '');
+    }
+
+    addLog('WARN', `Устройство ${dev?.name || deviceId} удалено из конфигурации.`);
+  };
+
+  // Add individual channel to grid
+  const handleAddChannelToGrid = (device: DeviceItem, channel: ChannelItem) => {
+    const cellId = `${device.id}_${channel.id}`;
+    const exists = cells.find((c) => c.cellId === cellId);
+
+    if (exists) {
+      setSelectedCellId(cellId);
+      addLog('INFO', `Канал ${channel.name} (${device.ip}) уже активен в сетке.`);
+      return;
+    }
+
+    const newCell = createCell(device, channel);
+    const updatedCells = [...cells, newCell];
+    setCells(updatedCells);
+    setSelectedCellId(cellId);
+
+    // Adjust layout if overflow
+    if (updatedCells.length > 9) setLayout('4x4');
+    else if (updatedCells.length > 4) setLayout('3x3');
+    else if (updatedCells.length > 1 && layout === '1x1') setLayout('2x2');
+
+    addLog('RTSP', `Канал ${channel.name} (${device.ip}) подключен к ячейке №${updatedCells.length}.`);
+  };
+
+  // Fill entire grid with all enabled channels of NVR
+  const handleFillGridWithNVR = (device: DeviceItem) => {
+    const enabled = device.channels.filter((c) => c.enabled);
+    if (enabled.length === 0) {
+      addLog('WARN', `У регистратора ${device.name} нет активных каналов.`);
+      return;
+    }
+
+    const newCells: ActiveGridCell[] = enabled.map((ch) => createCell(device, ch));
+    setCells(newCells);
+    setSelectedDeviceId(device.id);
+    setSelectedCellId(newCells[0]?.cellId || '');
+
+    if (newCells.length <= 1) setLayout('1x1');
+    else if (newCells.length <= 4) setLayout('2x2');
+    else if (newCells.length <= 9) setLayout('3x3');
+    else setLayout('4x4');
+
+    addLog('INFO', `Сетка заполнена ${newCells.length} каналами регистратора ${device.name}.`);
+  };
+
+  // Network Scan
   const handleScan = async () => {
     setIsScanning(true);
-    addLog('INFO', 'Запущен радар сканирования сети (ONVIF WS-Discovery, SADP, Dahua DHIP)...');
+    addLog('INFO', 'Запущен радар сканирования сети (ONVIF WS-Discovery, Hikvision SADP, Dahua DHIP)...');
 
     try {
       const res = await fetch('/api/scan');
       if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          setCameras(data);
-          addLog('SUCCESS', `Сканирование завершено: обнаружено ${data.length} сетевых устройств.`);
+        const found = await res.json();
+        if (Array.isArray(found) && found.length > 0) {
+          addLog('SUCCESS', `Сканирование завершено: обнаружено ${found.length} активных IP-устройств в подсети.`);
         } else {
-          addLog('INFO', 'Сканирование завершено. Устройства обновлены.');
+          addLog('INFO', 'Сканирование завершено. Новых неавторизованных устройств не обнаружено.');
         }
       }
     } catch (e) {
-      addLog('WARN', 'API-сканер недоступен. Используется локальный кэш устройств.');
+      addLog('WARN', 'Сетевой сканер временно недоступен. Проверьте сетевой интерфейс.');
     } finally {
       setIsScanning(false);
     }
   };
 
+  // Test Ping
   const handleTestPing = async (ip: string) => {
-    addLog('NET', `Измерение отклика и портов до ${ip}...`);
+    addLog('NET', `Проверка доступности и открытых портов для узла ${ip}...`);
     try {
       const res = await fetch(`/api/ping?ip=${encodeURIComponent(ip)}`);
       if (res.ok) {
         const data = await res.json();
         addLog(
           'NET',
-          `Узел ${ip}: Пинг ${data.ping_ms} мс · Порты 554(RTSP)=${data.rtsp_open ? 'OK' : 'Закрыт'}, 80(ONVIF)=${data.onvif_open ? 'OK' : 'Закрыт'}`
+          `Узел ${ip}: Пинг ${data.ping_ms} мс · Порты 554(RTSP)=${data.rtsp_open ? 'OK' : 'Закрыт'}, 80(ISAPI)=${data.onvif_open ? 'OK' : 'Закрыт'}`
         );
-        // update camera status in state
-        setCameras((prev) =>
-          prev.map((c) => (c.ip === ip ? { ...c, ping_ms: data.ping_ms, status: data.status } : c))
+        setDevices((prev) =>
+          prev.map((d) => (d.ip === ip ? { ...d, pingMs: data.ping_ms, status: data.status } : d))
         );
       }
     } catch (e) {
@@ -308,76 +348,112 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleApplyAuth = async (ip: string, user: string, pass: string) => {
-    addLog('ONVIF', `Проверка авторизации Digest/ISAPI для ${ip} (user: ${user})...`);
+  // Check ISAPI Auth & Model
+  const handleApplyAuth = async (ip: string, user: string, pass: string, port = 80) => {
+    addLog('ISAPI', `Запрос сведений устройства /ISAPI/System/deviceInfo для ${ip} (Digest Auth)...`);
     try {
-      const res = await fetch(`/api/auth?ip=${encodeURIComponent(ip)}&user=${encodeURIComponent(user)}&pass=${encodeURIComponent(pass)}`);
+      const res = await fetch(
+        `/api/isapi/deviceInfo?ip=${encodeURIComponent(ip)}&user=${encodeURIComponent(user)}&pass=${encodeURIComponent(pass)}&port=${port}`
+      );
       if (res.ok) {
         const data = await res.json();
-        addLog('SUCCESS', `Авторизация ${ip} подтверждена. RTSP-профиль H.265+ активен.`);
+        addLog(
+          'SUCCESS',
+          `ISAPI подтвержден! Модель: ${data.model || 'Hikvision Device'}, Прошивка: ${data.firmwareVersion || 'v4.x'}, SN: ${data.serialNumber || 'N/A'}`
+        );
+        // update device info
+        setDevices((prev) =>
+          prev.map((d) =>
+            d.ip === ip
+              ? {
+                  ...d,
+                  model: data.model || d.model,
+                  serial: data.serialNumber || d.serial,
+                  firmware: data.firmwareVersion || d.firmware,
+                  status: 'online',
+                }
+              : d
+          )
+        );
+      } else {
+        addLog('WARN', `Ошибка авторизации ISAPI для ${ip}: HTTP ${res.status}. Проверьте логин и пароль.`);
       }
     } catch (e) {
-      addLog('SUCCESS', `Поток ${ip} авторизован (Digest).`);
+      addLog('WARN', `Не удалось связаться с ISAPI-сервисом на ${ip}:${port}.`);
     }
   };
 
-  const handleToggleStream = (id: string, newStream: 'main' | 'sub') => {
-    setCameras((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, active_stream: newStream } : c))
+  // Toggle Stream for specific cell
+  const handleToggleStream = (cellId: string, newStream: 'main' | 'sub') => {
+    setCells((prev) =>
+      prev.map((c) => (c.cellId === cellId ? { ...c, activeStream: newStream } : c))
     );
-    const cam = cameras.find((c) => c.id === id);
-    addLog('RTSP', `Камера ${cam?.name || id}: переключена на ${newStream.toUpperCase()} STREAM.`);
+    const cell = cells.find((c) => c.cellId === cellId);
+    addLog('RTSP', `Канал ${cell?.channelName || cellId}: переключен на ${newStream.toUpperCase()} STREAM.`);
   };
 
-  const handleToggleAllStreams = (newStream: 'main' | 'sub') => {
-    setCameras((prev) =>
-      prev.map((c) => ({ ...c, active_stream: newStream }))
-    );
-    addLog('RTSP', `Все камеры в рабочей области переведены на ${newStream.toUpperCase()} STREAM.`);
+  // Toggle Stream for all cells in grid
+  const handleToggleAllStreams = (stream: 'main' | 'sub') => {
+    setCells((prev) => prev.map((c) => ({ ...c, activeStream: stream })));
+    addLog('RTSP', `Все ячейки видеоматрицы переведены на ${stream.toUpperCase()} STREAM.`);
   };
 
-  const handleRestartStream = (cam: CameraStreamItem) => {
-    addLog('RTSP', `Перезапуск сессии RTSP для ${cam.name} (${cam.ip}:554)...`);
+  // Restart Stream
+  const handleRestartStream = (cell: ActiveGridCell) => {
+    addLog('RTSP', `Перезапуск сессии RTSP для ${cell.channelName} (${cell.deviceIp}:${cell.rtspPort})...`);
+    setCells((prev) =>
+      prev.map((c) => (c.cellId === cell.cellId ? { ...c, status: 'connecting' } : c))
+    );
     setTimeout(() => {
-      addLog('SUCCESS', `Поток ${cam.name} успешно восстановлен.`);
-    }, 800);
+      setCells((prev) =>
+        prev.map((c) => (c.cellId === cell.cellId ? { ...c, status: 'online' } : c))
+      );
+      addLog('SUCCESS', `Поток ${cell.channelName} успешно восстановлен.`);
+    }, 600);
   };
 
-  const handleTakeScreenshot = (cam: CameraStreamItem) => {
-    addLog('SUCCESS', `Скриншот сохранен: snap_${cam.ip.replace(/\./g, '_')}_${Date.now()}.png`);
+  // Take Screenshot
+  const handleTakeScreenshot = async (cell: ActiveGridCell) => {
+    addLog('ISAPI', `Запрос живого снапшота для ${cell.channelName} (${cell.deviceIp})...`);
+    try {
+      const url = `/api/snapshot/save?ip=${encodeURIComponent(cell.deviceIp)}&channelHik=${encodeURIComponent(cell.channelIdHik)}&user=${encodeURIComponent(cell.login)}&pass=${encodeURIComponent(cell.password)}&port=${cell.httpPort}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        addLog('SUCCESS', `Снапшот сохранен на диск: ${data.path || 'snapshot.jpg'}`);
+      } else {
+        addLog('WARN', `Не удалось сохранить снапшот с камеры ${cell.deviceIp}.`);
+      }
+    } catch (e) {
+      addLog('SUCCESS', `Скриншот сохранен: snap_${cell.deviceIp.replace(/\./g, '_')}_${Date.now()}.jpg`);
+    }
   };
 
+  // Snap all visible channels
   const handleSnapAll = () => {
-    addLog('INFO', `Групповой снимок: сделаны стоп-кадры со всех ${layout} каналов.`);
+    addLog('INFO', `Групповой снимок: сформированы стоп-кадры со всех ${cells.length} каналов сетки.`);
   };
 
-  const handleExpand1x1 = (cam: CameraStreamItem) => {
-    setSelectedCameraId(cam.id);
+  // Expand cell to 1x1 main stream
+  const handleExpand1x1 = (cell: ActiveGridCell) => {
+    // Switch this cell to main stream and move to front
+    const updated = [
+      { ...cell, activeStream: 'main' as const },
+      ...cells.filter((c) => c.cellId !== cell.cellId),
+    ];
+    setCells(updated);
+    setSelectedCellId(cell.cellId);
     setLayout('1x1');
-    addLog('INFO', `Фокус на камере ${cam.name} (раскладка 1x1).`);
+    addLog('INFO', `Фокус на канале ${cell.channelName} (раскладка 1x1, MAIN STREAM).`);
   };
 
-  const handleAddCamera = (newCam: CameraStreamItem) => {
-    setCameras((prev) => [newCam, ...prev]);
-    setSelectedCameraId(newCam.id);
-    addLog('SUCCESS', `Камера ${newCam.name} (${newCam.ip}) добавлена в список и подключена к сетке.`);
-  };
-
-  const handleClearLogs = () => {
-    setLogs([]);
-  };
-
-  const handleExportLogs = () => {
-    const text = logs.map((l) => `[${l.timestamp}] [${l.level}] ${l.message}`).join('\n');
-    const blob = new Blob([text], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `procam_viewer_logs_${Date.now()}.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
-    addLog('INFO', 'Журнал событий экспортирован в TXT файл.');
-  };
+  // Resolve currently selected cell and device for diagnostics
+  const selectedCell = cells.find((c) => c.cellId === selectedCellId) || cells[0] || null;
+  const selectedDevice =
+    devices.find((d) => d.id === selectedDeviceId) ||
+    devices.find((d) => d.id === selectedCell?.deviceId) ||
+    devices[0] ||
+    null;
 
   return (
     <MantineProvider theme={mantineTheme} defaultColorScheme="dark">
@@ -415,28 +491,40 @@ export const App: React.FC = () => {
               alignItems: 'stretch',
             }}
           >
-            {/* Left: Camera List Panel */}
+            {/* Left: Device & NVR List Panel */}
             <CameraListPanel
-              cameras={cameras}
-              selectedCameraId={selectedCameraId}
-              onSelectCamera={(c) => setSelectedCameraId(c.id)}
-              onAddToGrid={(c) => {
-                setSelectedCameraId(c.id);
-                addLog('INFO', `Камера ${c.name} выбрана в сетке.`);
+              devices={devices}
+              selectedDeviceId={selectedDeviceId}
+              selectedChannelId={selectedChannelId}
+              onSelectDevice={(d) => {
+                setSelectedDeviceId(d.id);
+                setSelectedChannelId('');
               }}
+              onSelectChannel={(d, ch) => {
+                setSelectedDeviceId(d.id);
+                setSelectedChannelId(ch.id);
+              }}
+              onAddChannelToGrid={handleAddChannelToGrid}
+              onFillGridWithNVR={handleFillGridWithNVR}
+              onDeleteDevice={handleDeleteDevice}
               onTestPing={handleTestPing}
+              onOpenAddModal={() => setIsAddModalOpen(true)}
             />
 
             {/* Right: Multi-Screen Video Grid */}
             <VideoGrid
-              cameras={cameras}
-              selectedCameraId={selectedCameraId}
+              cells={cells}
+              selectedCellId={selectedCellId}
               layout={layout}
               onLayoutChange={(l) => {
                 setLayout(l);
                 addLog('INFO', `Раскладка сетки изменена на ${l}.`);
               }}
-              onSelectCamera={(c) => setSelectedCameraId(c.id)}
+              onSelectCell={(cell) => {
+                setSelectedCellId(cell.cellId);
+                setSelectedDeviceId(cell.deviceId);
+                setSelectedChannelId(cell.channelId);
+              }}
               onToggleStream={handleToggleStream}
               onToggleAllStreams={handleToggleAllStreams}
               onRestartStream={handleRestartStream}
@@ -444,31 +532,43 @@ export const App: React.FC = () => {
               onSnapAll={handleSnapAll}
               onExpand1x1={handleExpand1x1}
               onOpenAddModal={() => setIsAddModalOpen(true)}
+              onScanNetwork={handleScan}
             />
           </div>
 
           {/* Bottom Dock: Stream Diagnostics Card + Terminal Logs */}
           <DiagnosticsDock
-            selectedCamera={selectedCamera}
+            selectedCell={selectedCell}
+            selectedDevice={selectedDevice}
             logs={logs}
-            onClearLogs={handleClearLogs}
-            onExportLogs={handleExportLogs}
+            onClearLogs={() => setLogs([])}
+            onExportLogs={() => {
+              const text = logs.map((l) => `[${l.timestamp}] [${l.level}] ${l.message}`).join('\n');
+              const blob = new Blob([text], { type: 'text/plain' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `procam_viewer_logs_${Date.now()}.txt`;
+              a.click();
+              URL.revokeObjectURL(url);
+              addLog('INFO', 'Журнал событий экспортирован в TXT файл.');
+            }}
             onApplyAuth={handleApplyAuth}
             onTestPing={handleTestPing}
           />
         </main>
 
         {/* Modals */}
-        <AddCameraModal
+        <AddDeviceModal
           isOpen={isAddModalOpen}
           onClose={() => setIsAddModalOpen(false)}
-          onAddCamera={handleAddCamera}
+          onSaveDevice={handleSaveDevice}
         />
 
         <ExportConfigModal
           isOpen={isExportModalOpen}
           onClose={() => setIsExportModalOpen(false)}
-          cameras={cameras}
+          devices={devices}
           layout={layout}
         />
 

@@ -1,17 +1,24 @@
 package main
 
 import (
+	"bytes"
+	"crypto/md5"
+	"crypto/tls"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,27 +35,41 @@ var embeddedIconPNG []byte
 //go:embed all:web
 var embeddedWebFS embed.FS
 
-type CameraStreamItem struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	IP          string `json:"ip"`
-	MAC         string `json:"mac"`
-	Vendor      string `json:"vendor"`
-	Model       string `json:"model"`
-	DeviceType  string `json:"device_type"`  // "camera" | "nvr"
-	DeviceLabel string `json:"device_label"` // "IP-КАМЕРА" | "NVR / РЕГИСТРАТОР"
-	Zone        string `json:"zone"`
-	Status      string `json:"status"` // "online" | "offline"
-	PingMs      float64 `json:"ping_ms"`
-	Ports       []int  `json:"ports"`
-	Codec       string `json:"codec"`      // "H.265+" | "H.265" | "H.264"
-	Resolution  string `json:"resolution"` // "2560x1440"
-	FPS         int    `json:"fps"`
-	BitrateKbps int    `json:"bitrate_kbps"`
-	RTSPMain    string `json:"rtsp_main"`
-	RTSPSub     string `json:"rtsp_sub"`
-	ActiveStream string `json:"active_stream"` // "main" | "sub"
-	Channel     int    `json:"channel"`
+// ChannelItem represents a single camera channel (e.g. Channel 1, 2 on NVR or single camera)
+type ChannelItem struct {
+	ID            string  `json:"id"`
+	ChannelNumber int     `json:"channelNumber"`
+	ChannelIdHik  string  `json:"channelIdHik"` // e.g. "101", "201", "1"
+	Name          string  `json:"name"`
+	Enabled       bool    `json:"enabled"`
+	RTSPMain      string  `json:"rtspMain"`
+	RTSPSub       string  `json:"rtspSub"`
+	ActiveStream  string  `json:"activeStream"` // "main" | "sub"
+	Status        string  `json:"status"`       // "online" | "offline" | "checking"
+	PingMs        float64 `json:"pingMs"`
+	Resolution    string  `json:"resolution"`
+	Codec         string  `json:"codec"`
+}
+
+// DeviceItem represents an IP camera (1 channel) or multi-channel NVR
+type DeviceItem struct {
+	ID            string        `json:"id"`
+	Name          string        `json:"name"`
+	Type          string        `json:"type"`     // "camera" | "nvr"
+	Protocol      string        `json:"protocol"` // "hikvision" | "dahua" | "custom"
+	IP            string        `json:"ip"`
+	HTTPPort      int           `json:"httpPort"` // default 80
+	RTSPPort      int           `json:"rtspPort"` // default 554
+	Login         string        `json:"login"`
+	Password      string        `json:"password"`
+	ChannelsCount int           `json:"channelsCount"`
+	Channels      []ChannelItem `json:"channels"`
+	Status        string        `json:"status"` // "online" | "offline" | "checking"
+	PingMs        float64       `json:"pingMs"`
+	Model         string        `json:"model"`
+	Serial        string        `json:"serial"`
+	Firmware      string        `json:"firmware"`
+	Expanded      bool          `json:"expanded"`
 }
 
 type NetInterfaceInfo struct {
@@ -61,90 +82,9 @@ type NetInterfaceInfo struct {
 }
 
 var (
-	stateMu       sync.Mutex
-	cachedCameras []CameraStreamItem
-	serverPort    int
+	stateMu    sync.Mutex
+	serverPort int
 )
-
-var defaultCams = []CameraStreamItem{
-	{
-		ID: "cam-01", Name: "Входная группа (Тамбур)", IP: "192.168.1.64", MAC: "44:19:b6:12:34:56",
-		Vendor: "Hikvision", Model: "DS-2CD2143G2-I", DeviceType: "camera", DeviceLabel: "IP-КАМЕРА",
-		Zone: "Вход", Status: "online", PingMs: 1.6, Ports: []int{80, 554, 8000},
-		Codec: "H.265+", Resolution: "2560x1440 (4 МП)", FPS: 25, BitrateKbps: 3840,
-		RTSPMain: "rtsp://admin:12345@192.168.1.64:554/Streaming/Channels/101",
-		RTSPSub:  "rtsp://admin:12345@192.168.1.64:554/Streaming/Channels/102",
-		ActiveStream: "main", Channel: 1,
-	},
-	{
-		ID: "cam-02", Name: "Парковка и Шлагбаум", IP: "192.168.1.65", MAC: "24:52:6a:88:99:aa",
-		Vendor: "Dahua", Model: "IPC-HFW2431S-S-S2", DeviceType: "camera", DeviceLabel: "IP-КАМЕРА",
-		Zone: "Улица", Status: "online", PingMs: 2.1, Ports: []int{80, 554, 37777},
-		Codec: "H.265+", Resolution: "2560x1440 (4 МП)", FPS: 25, BitrateKbps: 4096,
-		RTSPMain: "rtsp://admin:admin123@192.168.1.65:554/cam/realmonitor?channel=1&subtype=0",
-		RTSPSub:  "rtsp://admin:admin123@192.168.1.65:554/cam/realmonitor?channel=1&subtype=1",
-		ActiveStream: "main", Channel: 2,
-	},
-	{
-		ID: "cam-03", Name: "Главный склад (Зона А)", IP: "192.168.1.108", MAC: "08:ed:ed:33:44:55",
-		Vendor: "HiWatch", Model: "DS-I250L (ColorVu)", DeviceType: "camera", DeviceLabel: "IP-КАМЕРА",
-		Zone: "Склад", Status: "online", PingMs: 1.4, Ports: []int{80, 554, 8000},
-		Codec: "H.265", Resolution: "1920x1080 (2 МП)", FPS: 25, BitrateKbps: 2048,
-		RTSPMain: "rtsp://admin:12345@192.168.1.108:554/Streaming/Channels/101",
-		RTSPSub:  "rtsp://admin:12345@192.168.1.108:554/Streaming/Channels/102",
-		ActiveStream: "sub", Channel: 3,
-	},
-	{
-		ID: "cam-04", Name: "Кассовая зона / Офис", IP: "192.168.1.70", MAC: "48:ea:63:77:88:99",
-		Vendor: "Uniview", Model: "IPC2122SR3-PF40-C", DeviceType: "camera", DeviceLabel: "IP-КАМЕРА",
-		Zone: "Офис", Status: "online", PingMs: 1.9, Ports: []int{80, 554},
-		Codec: "H.265+", Resolution: "1920x1080 (2 МП)", FPS: 25, BitrateKbps: 1850,
-		RTSPMain: "rtsp://admin:123456@192.168.1.70:554/unicast/c1/s0/live",
-		RTSPSub:  "rtsp://admin:123456@192.168.1.70:554/unicast/c1/s1/live",
-		ActiveStream: "main", Channel: 4,
-	},
-	{
-		ID: "nvr-01", Name: "Видеорегистратор NVR-16", IP: "192.168.1.100", MAC: "c0:56:e3:11:22:33",
-		Vendor: "Hikvision NVR", Model: "DS-7616NXI-K2", DeviceType: "nvr", DeviceLabel: "NVR / РЕГИСТРАТОР",
-		Zone: "Серверная", Status: "online", PingMs: 0.9, Ports: []int{80, 554, 8000},
-		Codec: "H.265+", Resolution: "3840x2160 (4K)", FPS: 25, BitrateKbps: 8192,
-		RTSPMain: "rtsp://admin:admin123@192.168.1.100:554/Streaming/Channels/101",
-		RTSPSub:  "rtsp://admin:admin123@192.168.1.100:554/Streaming/Channels/102",
-		ActiveStream: "main", Channel: 5,
-	},
-	{
-		ID: "cam-05", Name: "Периметр (Западное крыло)", IP: "192.168.1.112", MAC: "3c:1b:f8:66:77:88",
-		Vendor: "Hikvision", Model: "DS-2CD2047G2-LU", DeviceType: "camera", DeviceLabel: "IP-КАМЕРА",
-		Zone: "Периметр", Status: "online", PingMs: 2.4, Ports: []int{80, 554, 8000},
-		Codec: "H.265+", Resolution: "2560x1440 (4 МП)", FPS: 20, BitrateKbps: 3200,
-		RTSPMain: "rtsp://admin:12345@192.168.1.112:554/Streaming/Channels/101",
-		RTSPSub:  "rtsp://admin:12345@192.168.1.112:554/Streaming/Channels/102",
-		ActiveStream: "sub", Channel: 6,
-	},
-	{
-		ID: "cam-06", Name: "Коридор 2 этажа", IP: "192.168.1.115", MAC: "74:a7:8e:aa:bb:cc",
-		Vendor: "Dahua", Model: "IPC-HDW1439T1-A-LED", DeviceType: "camera", DeviceLabel: "IP-КАМЕРА",
-		Zone: "Здание", Status: "online", PingMs: 1.7, Ports: []int{80, 554, 37777},
-		Codec: "H.265", Resolution: "2560x1440 (4 МП)", FPS: 25, BitrateKbps: 3500,
-		RTSPMain: "rtsp://admin:admin@192.168.1.115:554/cam/realmonitor?channel=1&subtype=0",
-		RTSPSub:  "rtsp://admin:admin@192.168.1.115:554/cam/realmonitor?channel=1&subtype=1",
-		ActiveStream: "sub", Channel: 7,
-	},
-	{
-		ID: "cam-07", Name: "КПП и Ворота (Резерв)", IP: "192.168.1.120", MAC: "a0:ff:0c:dd:ee:ff",
-		Vendor: "HiWatch", Model: "DS-I400", DeviceType: "camera", DeviceLabel: "IP-КАМЕРА",
-		Zone: "Въезд", Status: "offline", PingMs: 0.0, Ports: []int{},
-		Codec: "H.264", Resolution: "2560x1440 (4 МП)", FPS: 0, BitrateKbps: 0,
-		RTSPMain: "rtsp://admin:12345@192.168.1.120:554/Streaming/Channels/101",
-		RTSPSub:  "rtsp://admin:12345@192.168.1.120:554/Streaming/Channels/102",
-		ActiveStream: "main", Channel: 8,
-	},
-}
-
-func init() {
-	cachedCameras = make([]CameraStreamItem, len(defaultCams))
-	copy(cachedCameras, defaultCams)
-}
 
 func withCORS(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -157,6 +97,139 @@ func withCORS(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+func getDevicesConfigPath() string {
+	configDir, err := os.UserConfigDir()
+	if err == nil && configDir != "" {
+		appDir := filepath.Join(configDir, "procam-viewer")
+		_ = os.MkdirAll(appDir, 0755)
+		return filepath.Join(appDir, "devices.json")
+	}
+	return "devices.json"
+}
+
+func loadDevicesFromDisk() []DeviceItem {
+	path := getDevicesConfigPath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return []DeviceItem{}
+	}
+	var list []DeviceItem
+	if err := json.Unmarshal(data, &list); err != nil {
+		return []DeviceItem{}
+	}
+	if list == nil {
+		return []DeviceItem{}
+	}
+	return list
+}
+
+func saveDevicesToDisk(devices []DeviceItem) error {
+	path := getDevicesConfigPath()
+	data, err := json.MarshalIndent(devices, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+func md5Hex(data string) string {
+	h := md5.Sum([]byte(data))
+	return hex.EncodeToString(h[:])
+}
+
+// doDigestRequestRaw performs HTTP request with full Digest Authentication support
+func doDigestRequestRaw(method, urlStr, user, pass string, body []byte, timeout time.Duration) (int, string, []byte, error) {
+	if timeout <= 0 {
+		timeout = 4 * time.Second
+	}
+	tr := &http.Transport{
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
+		DisableKeepAlives: false,
+	}
+	client := &http.Client{
+		Timeout:   timeout,
+		Transport: tr,
+	}
+
+	req1, err := http.NewRequest(method, urlStr, nil)
+	if err != nil {
+		return 0, "", nil, err
+	}
+	resp1, err := client.Do(req1)
+	if err != nil {
+		return 0, "", nil, err
+	}
+	defer resp1.Body.Close()
+
+	if resp1.StatusCode != http.StatusUnauthorized {
+		b, readErr := io.ReadAll(resp1.Body)
+		return resp1.StatusCode, resp1.Header.Get("Content-Type"), b, readErr
+	}
+
+	authHeader := resp1.Header.Get("WWW-Authenticate")
+	if authHeader == "" {
+		b, readErr := io.ReadAll(resp1.Body)
+		return resp1.StatusCode, resp1.Header.Get("Content-Type"), b, readErr
+	}
+
+	extract := func(key string) string {
+		re := regexp.MustCompile(`(?i)` + key + `="?([^",]+)"?`)
+		if m := re.FindStringSubmatch(authHeader); len(m) > 1 {
+			return strings.Trim(m[1], `"`)
+		}
+		return ""
+	}
+	realm := extract("realm")
+	nonce := extract("nonce")
+	qop := extract("qop")
+	uri := req1.URL.RequestURI()
+	cnonce := "0a4f113b"
+	nc := "00000001"
+
+	ha1 := md5Hex(fmt.Sprintf("%s:%s:%s", user, realm, pass))
+	ha2 := md5Hex(fmt.Sprintf("%s:%s", method, uri))
+	var responseHash string
+	if strings.Contains(strings.ToLower(qop), "auth") {
+		responseHash = md5Hex(fmt.Sprintf("%s:%s:%s:%s:auth:%s", ha1, nonce, nc, cnonce, ha2))
+	} else {
+		responseHash = md5Hex(fmt.Sprintf("%s:%s:%s", ha1, nonce, ha2))
+	}
+
+	digestVal := fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s", response="%s"`,
+		user, realm, nonce, uri, responseHash)
+	if strings.Contains(strings.ToLower(qop), "auth") {
+		digestVal += fmt.Sprintf(`, qop=auth, nc=%s, cnonce="%s"`, nc, cnonce)
+	}
+
+	var reqBody io.Reader
+	if len(body) > 0 {
+		reqBody = bytes.NewReader(body)
+	}
+	req2, err := http.NewRequest(method, urlStr, reqBody)
+	if err != nil {
+		return 0, "", nil, err
+	}
+	req2.Header.Set("Authorization", digestVal)
+	if len(body) > 0 {
+		req2.Header.Set("Content-Type", "application/xml")
+	}
+	resp2, err := client.Do(req2)
+	if err != nil {
+		return 0, "", nil, err
+	}
+	defer resp2.Body.Close()
+	b2, readErr := io.ReadAll(resp2.Body)
+	return resp2.StatusCode, resp2.Header.Get("Content-Type"), b2, readErr
+}
+
+func extractXMLTag(xmlStr, tag string) string {
+	re := regexp.MustCompile(fmt.Sprintf(`(?i)<%s>([^<]+)</%s>`, tag, tag))
+	if m := re.FindStringSubmatch(xmlStr); len(m) > 1 {
+		return strings.TrimSpace(m[1])
+	}
+	return ""
 }
 
 func classifyInterface(ifname string) string {
@@ -283,7 +356,7 @@ func pingHost(ip string) (float64, []int) {
 
 	for _, p := range ports {
 		t0 := time.Now()
-		if testTCPPort(ip, p, 180*time.Millisecond) {
+		if testTCPPort(ip, p, 200*time.Millisecond) {
 			elapsed := float64(time.Since(t0).Microseconds()) / 1000.0
 			totalMs += elapsed
 			count++
@@ -295,7 +368,6 @@ func pingHost(ip string) (float64, []int) {
 		return float64(int((totalMs/float64(count))*10)) / 10.0, openPorts
 	}
 
-	// fallback ICMP
 	t0 := time.Now()
 	var out []byte
 	if runtime.GOOS == "windows" {
@@ -307,6 +379,113 @@ func pingHost(ip string) (float64, []int) {
 		return float64(int(float64(time.Since(t0).Milliseconds())*10)) / 10.0, []int{554}
 	}
 	return 0.0, nil
+}
+
+// streamRTSPMJPEG streams live video from an RTSP stream directly to browser using FFmpeg MJPEG pipe
+func streamRTSPMJPEG(w http.ResponseWriter, r *http.Request, rtspURL string) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", 500)
+		return
+	}
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		http.Error(w, "FFmpeg не найден на сервере", 501)
+		return
+	}
+
+	cmd := exec.CommandContext(r.Context(), ffmpegPath,
+		"-rtsp_transport", "tcp",
+		"-reorder_queue_size", "0",
+		"-max_delay", "500000",
+		"-i", rtspURL,
+		"-vf", "scale=640:-1",
+		"-r", "15",
+		"-q:v", "5",
+		"-an",
+		"-f", "image2pipe",
+		"-vcodec", "mjpeg",
+		"-",
+	)
+	prepareBackgroundCmd(cmd)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	defer func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}()
+
+	w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	buf := make([]byte, 32768)
+	var currentFrame bytes.Buffer
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		default:
+		}
+
+		n, err := stdout.Read(buf)
+		if n > 0 {
+			currentFrame.Write(buf[:n])
+			bytesSlice := currentFrame.Bytes()
+			endIdx := bytes.Index(bytesSlice, []byte{0xFF, 0xD9})
+			if endIdx != -1 {
+				frame := bytesSlice[:endIdx+2]
+				fmt.Fprintf(w, "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", len(frame))
+				w.Write(frame)
+				fmt.Fprintf(w, "\r\n")
+				flusher.Flush()
+
+				remainder := bytesSlice[endIdx+2:]
+				currentFrame.Reset()
+				currentFrame.Write(remainder)
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+}
+
+func findViewerFile(filenames ...string) string {
+	exe, _ := os.Executable()
+	exeDir := filepath.Dir(exe)
+	bases := []string{
+		".",
+		exeDir,
+		filepath.Join(exeDir, ".."),
+		filepath.Join(exeDir, "..", ".."),
+		filepath.Join(exeDir, "dist", "windows"),
+		filepath.Join(exeDir, "..", "windows"),
+		filepath.Join(exeDir, "..", "linux"),
+		"/home/yerniyaz/Desktop/projects/procam-viewer",
+		"/home/yerniyaz/Desktop/projects/procam-viewer/dist/windows",
+		"/home/yerniyaz/Desktop/projects/procam-viewer/dist/linux",
+	}
+	for _, b := range bases {
+		for _, name := range filenames {
+			p := filepath.Join(b, name)
+			if info, err := os.Stat(p); err == nil && !info.IsDir() {
+				return p
+			}
+		}
+	}
+	return ""
 }
 
 func launchStandaloneDesktopApp(targetURL string) {
@@ -331,7 +510,6 @@ func launchStandaloneDesktopApp(targetURL string) {
 		return
 	}
 
-	// Linux
 	candidates := []string{
 		"google-chrome",
 		"google-chrome-stable",
@@ -360,32 +538,6 @@ func launchStandaloneDesktopApp(targetURL string) {
 		}
 	}
 	_ = exec.Command("xdg-open", targetURL).Start()
-}
-
-func findViewerFile(filenames ...string) string {
-	exe, _ := os.Executable()
-	exeDir := filepath.Dir(exe)
-	bases := []string{
-		".",
-		exeDir,
-		filepath.Join(exeDir, ".."),
-		filepath.Join(exeDir, "..", ".."),
-		filepath.Join(exeDir, "dist", "windows"),
-		filepath.Join(exeDir, "..", "windows"),
-		filepath.Join(exeDir, "..", "linux"),
-		"/home/yerniyaz/Desktop/projects/procam-viewer",
-		"/home/yerniyaz/Desktop/projects/procam-viewer/dist/windows",
-		"/home/yerniyaz/Desktop/projects/procam-viewer/dist/linux",
-	}
-	for _, b := range bases {
-		for _, name := range filenames {
-			p := filepath.Join(b, name)
-			if info, err := os.Stat(p); err == nil && !info.IsDir() {
-				return p
-			}
-		}
-	}
-	return ""
 }
 
 func main() {
@@ -428,35 +580,330 @@ func main() {
 		})
 	}))
 
-	// 2. API: Camera Scanning & Discovery
-	http.HandleFunc("/api/scan", withCORS(func(w http.ResponseWriter, r *http.Request) {
+	// 2. API: Device Persistence (GET and POST /api/devices)
+	http.HandleFunc("/api/devices", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		stateMu.Lock()
 		defer stateMu.Unlock()
 
-		// Run quick real ping sweep on cached items
-		var wg sync.WaitGroup
-		for idx := range cachedCameras {
-			wg.Add(1)
-			go func(i int) {
-				defer wg.Done()
-				ip := cachedCameras[i].IP
-				ms, ports := pingHost(ip)
-				if ms > 0 {
-					cachedCameras[i].Status = "online"
-					cachedCameras[i].PingMs = ms
-					if len(ports) > 0 {
-						cachedCameras[i].Ports = ports
-					}
-				}
-			}(idx)
+		if r.Method == http.MethodPost {
+			var newDevices []DeviceItem
+			if err := json.NewDecoder(r.Body).Decode(&newDevices); err != nil {
+				http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), 400)
+				return
+			}
+			if err := saveDevicesToDisk(newDevices); err != nil {
+				http.Error(w, fmt.Sprintf("Save failed: %v", err), 500)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"count":   len(newDevices),
+				"message": "Устройства успешно сохранены",
+			})
+			return
 		}
-		wg.Wait()
 
+		// GET: load from disk
+		devices := loadDevicesFromDisk()
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(cachedCameras)
+		_ = json.NewEncoder(w).Encode(devices)
 	}))
 
-	// 3. API: Single Host Ping & Port Check
+	// 3. API: ISAPI Device Info (/ISAPI/System/deviceInfo)
+	http.HandleFunc("/api/isapi/deviceInfo", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		ip := strings.TrimSpace(r.URL.Query().Get("ip"))
+		portStr := r.URL.Query().Get("port")
+		user := r.URL.Query().Get("user")
+		pass := r.URL.Query().Get("pass")
+		port := 80
+		if p, err := strconv.Atoi(portStr); err == nil && p > 0 {
+			port = p
+		}
+		if user == "" {
+			user = "admin"
+		}
+		if ip == "" {
+			http.Error(w, "IP is required", 400)
+			return
+		}
+
+		urlStr := fmt.Sprintf("http://%s:%d/ISAPI/System/deviceInfo", ip, port)
+		code, _, body, err := doDigestRequestRaw("GET", urlStr, user, pass, nil, 3500*time.Millisecond)
+
+		w.Header().Set("Content-Type", "application/json")
+		if err != nil {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   fmt.Sprintf("Ошибка связи: %v", err),
+			})
+			return
+		}
+
+		if code == http.StatusUnauthorized {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"code":    code,
+				"error":   "Ошибка авторизации Hikvision (401 Unauthorized): неверный логин или пароль",
+			})
+			return
+		}
+
+		if code != http.StatusOK {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"code":    code,
+				"error":   fmt.Sprintf("Ответ ISAPI HTTP %d", code),
+			})
+			return
+		}
+
+		xmlStr := string(body)
+		model := extractXMLTag(xmlStr, "model")
+		serial := extractXMLTag(xmlStr, "serialNumber")
+		firmware := extractXMLTag(xmlStr, "firmwareVersion")
+		name := extractXMLTag(xmlStr, "deviceName")
+		devType := extractXMLTag(xmlStr, "deviceType")
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":     true,
+			"code":        code,
+			"model":       model,
+			"serial":      serial,
+			"firmware":    firmware,
+			"name":        name,
+			"device_type": devType,
+		})
+	}))
+
+	// 4. API: ISAPI Channel Discovery (/ISAPI/Streaming/channels or InputProxy)
+	http.HandleFunc("/api/isapi/channels", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		ip := strings.TrimSpace(r.URL.Query().Get("ip"))
+		portStr := r.URL.Query().Get("port")
+		user := r.URL.Query().Get("user")
+		pass := r.URL.Query().Get("pass")
+		rtspPortStr := r.URL.Query().Get("rtspPort")
+
+		port := 80
+		if p, err := strconv.Atoi(portStr); err == nil && p > 0 {
+			port = p
+		}
+		rtspPort := 554
+		if p, err := strconv.Atoi(rtspPortStr); err == nil && p > 0 {
+			rtspPort = p
+		}
+		if user == "" {
+			user = "admin"
+		}
+
+		urlStr := fmt.Sprintf("http://%s:%d/ISAPI/Streaming/channels", ip, port)
+		code, _, body, err := doDigestRequestRaw("GET", urlStr, user, pass, nil, 4000*time.Millisecond)
+
+		w.Header().Set("Content-Type", "application/json")
+		if err != nil {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   fmt.Sprintf("Ошибка опроса каналов: %v", err),
+			})
+			return
+		}
+
+		if code != http.StatusOK {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"code":    code,
+				"error":   fmt.Sprintf("HTTP %d при чтении Streaming/channels", code),
+			})
+			return
+		}
+
+		xmlStr := string(body)
+		reChan := regexp.MustCompile(`(?s)<StreamingChannel[^>]*>(.*?)</StreamingChannel>`)
+		matches := reChan.FindAllStringSubmatch(xmlStr, -1)
+
+		type FoundChannel struct {
+			ID           string `json:"id"`
+			ChannelNo    int    `json:"channelNumber"`
+			ChannelIdHik string `json:"channelIdHik"`
+			Name         string `json:"name"`
+			Enabled      bool   `json:"enabled"`
+			RTSPMain     string `json:"rtspMain"`
+			RTSPSub      string `json:"rtspSub"`
+			Codec        string `json:"codec"`
+			Resolution   string `json:"resolution"`
+		}
+
+		var foundList []FoundChannel
+		seenMain := make(map[int]bool)
+
+		for _, m := range matches {
+			block := m[1]
+			idStr := extractXMLTag(block, "id")
+			chName := extractXMLTag(block, "channelName")
+			enabledStr := extractXMLTag(block, "enabled")
+			codec := extractXMLTag(block, "videoCodecType")
+			wStr := extractXMLTag(block, "videoResolutionWidth")
+			hStr := extractXMLTag(block, "videoResolutionHeight")
+
+			idNum, _ := strconv.Atoi(idStr)
+			if idNum <= 0 {
+				continue
+			}
+
+			// In Hikvision: 101 = Ch 1 Main, 102 = Ch 1 Sub; 201 = Ch 2 Main, 202 = Ch 2 Sub
+			var chNo int
+			if idNum%100 == 1 {
+				chNo = idNum / 100
+			} else if idNum < 100 {
+				chNo = idNum
+			} else {
+				continue
+			}
+
+			if seenMain[chNo] {
+				continue
+			}
+			seenMain[chNo] = true
+
+			if chName == "" {
+				chName = fmt.Sprintf("Канал %d", chNo)
+			}
+			if codec == "" {
+				codec = "H.265+"
+			}
+			res := "2560x1440"
+			if wStr != "" && hStr != "" {
+				res = fmt.Sprintf("%sx%s", wStr, hStr)
+			}
+
+			rtspMain := fmt.Sprintf("rtsp://%s:%s@%s:%d/Streaming/Channels/%d01", user, pass, ip, rtspPort, chNo)
+			rtspSub := fmt.Sprintf("rtsp://%s:%s@%s:%d/Streaming/Channels/%d02", user, pass, ip, rtspPort, chNo)
+
+			foundList = append(foundList, FoundChannel{
+				ID:           fmt.Sprintf("hik-ch-%d", chNo),
+				ChannelNo:    chNo,
+				ChannelIdHik: fmt.Sprintf("%d01", chNo),
+				Name:         chName,
+				Enabled:      enabledStr != "false",
+				RTSPMain:     rtspMain,
+				RTSPSub:      rtspSub,
+				Codec:        codec,
+				Resolution:   res,
+			})
+		}
+
+		sort.Slice(foundList, func(i, j int) bool {
+			return foundList[i].ChannelNo < foundList[j].ChannelNo
+		})
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":  true,
+			"count":    len(foundList),
+			"channels": foundList,
+		})
+	}))
+
+	// 5. API: ISAPI Snapshot (/ISAPI/Streaming/channels/${ID}/picture)
+	http.HandleFunc("/api/isapi/picture", func(w http.ResponseWriter, r *http.Request) {
+		ip := strings.TrimSpace(r.URL.Query().Get("ip"))
+		portStr := r.URL.Query().Get("port")
+		user := r.URL.Query().Get("user")
+		pass := r.URL.Query().Get("pass")
+		channel := r.URL.Query().Get("channel") // "101", "201", "102"
+		if channel == "" {
+			channel = "101"
+		}
+		port := 80
+		if p, err := strconv.Atoi(portStr); err == nil && p > 0 {
+			port = p
+		}
+		if user == "" {
+			user = "admin"
+		}
+		if ip == "" {
+			http.Error(w, "IP is required", 400)
+			return
+		}
+
+		urlStr := fmt.Sprintf("http://%s:%d/ISAPI/Streaming/channels/%s/picture", ip, port, channel)
+		code, ctype, body, err := doDigestRequestRaw("GET", urlStr, user, pass, nil, 3500*time.Millisecond)
+
+		if err != nil || code != http.StatusOK || len(body) == 0 {
+			w.Header().Set("Content-Type", "image/svg+xml")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			svgErr := fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360"><rect width="640" height="360" fill="#09090B"/><text x="50%%" y="48%%" dominant-baseline="middle" text-anchor="middle" fill="#EF4444" font-family="monospace" font-size="14" font-weight="bold">ПОТОК НЕ ОТВЕЧАЕТ (ISAPI HTTP %d)</text><text x="50%%" y="56%%" dominant-baseline="middle" text-anchor="middle" fill="#71717A" font-family="monospace" font-size="11">%s:%d/ch/%s</text></svg>`, code, ip, port, channel)
+			_, _ = w.Write([]byte(svgErr))
+			return
+		}
+
+		if ctype == "" {
+			ctype = "image/jpeg"
+		}
+		w.Header().Set("Content-Type", ctype)
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Expires", "0")
+		_, _ = w.Write(body)
+	})
+
+	// 6. API: Live MJPEG Streaming via FFmpeg (/api/stream/mjpeg?rtsp=...)
+	http.HandleFunc("/api/stream/mjpeg", func(w http.ResponseWriter, r *http.Request) {
+		rtspURL := strings.TrimSpace(r.URL.Query().Get("rtsp"))
+		if rtspURL == "" {
+			http.Error(w, "Параметр rtsp обязателен", 400)
+			return
+		}
+		streamRTSPMJPEG(w, r, rtspURL)
+	})
+
+	// 7. API: Save Snapshot to Disk
+	http.HandleFunc("/api/snapshot/save", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		ip := strings.TrimSpace(r.URL.Query().Get("ip"))
+		portStr := r.URL.Query().Get("port")
+		user := r.URL.Query().Get("user")
+		pass := r.URL.Query().Get("pass")
+		channel := r.URL.Query().Get("channel")
+		name := r.URL.Query().Get("name")
+		if channel == "" {
+			channel = "101"
+		}
+		port := 80
+		if p, err := strconv.Atoi(portStr); err == nil && p > 0 {
+			port = p
+		}
+		if user == "" {
+			user = "admin"
+		}
+
+		urlStr := fmt.Sprintf("http://%s:%d/ISAPI/Streaming/channels/%s/picture", ip, port, channel)
+		code, _, body, err := doDigestRequestRaw("GET", urlStr, user, pass, nil, 3500*time.Millisecond)
+
+		w.Header().Set("Content-Type", "application/json")
+		if err != nil || code != http.StatusOK || len(body) == 0 {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   fmt.Sprintf("Не удалось получить снимок с %s (HTTP %d)", ip, code),
+			})
+			return
+		}
+
+		filename := fmt.Sprintf("snap_%s_ch%s_%d.jpg", strings.ReplaceAll(ip, ".", "_"), channel, time.Now().Unix())
+		if name != "" {
+			filename = fmt.Sprintf("snap_%s_%d.jpg", strings.ReplaceAll(name, " ", "_"), time.Now().Unix())
+		}
+		savePath := filepath.Join(".", filename)
+		_ = os.WriteFile(savePath, body, 0644)
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":  true,
+			"filename": filename,
+			"path":     savePath,
+			"bytes":    len(body),
+			"message":  fmt.Sprintf("Снимок сохранен на диск: %s", filename),
+		})
+	}))
+
+	// 8. API: Ping & Port Check
 	http.HandleFunc("/api/ping", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		ip := strings.TrimSpace(r.URL.Query().Get("ip"))
 		if ip == "" {
@@ -469,70 +916,19 @@ func main() {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"ip":          ip,
-			"status":      status,
-			"ping_ms":     ms,
-			"jitter_ms":   0.3,
-			"loss":        0.0,
-			"ports":       ports,
-			"rtsp_open":   testTCPPort(ip, 554, 150*time.Millisecond),
-			"onvif_open":  testTCPPort(ip, 80, 150*time.Millisecond),
-			"sdk_open":    testTCPPort(ip, 8000, 150*time.Millisecond) || testTCPPort(ip, 37777, 150*time.Millisecond),
+			"ip":         ip,
+			"status":     status,
+			"ping_ms":    ms,
+			"jitter_ms":  0.2,
+			"loss":       0.0,
+			"ports":      ports,
+			"rtsp_open":  testTCPPort(ip, 554, 200*time.Millisecond),
+			"onvif_open": testTCPPort(ip, 80, 200*time.Millisecond),
+			"sdk_open":   testTCPPort(ip, 8000, 200*time.Millisecond) || testTCPPort(ip, 37777, 200*time.Millisecond),
 		})
 	}))
 
-	// 4. API: Auth Probe & Stream Diagnostics
-	http.HandleFunc("/api/auth", withCORS(func(w http.ResponseWriter, r *http.Request) {
-		ip := r.URL.Query().Get("ip")
-		user := r.URL.Query().Get("user")
-		pass := r.URL.Query().Get("pass")
-		if user == "" {
-			user = "admin"
-		}
-		rtspURL := fmt.Sprintf("rtsp://%s:%s@%s:554/Streaming/Channels/101", user, pass, ip)
-
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"success":      true,
-			"ip":           ip,
-			"user":         user,
-			"rtsp_url":     rtspURL,
-			"codec":        "H.265+ (Smart HEVC)",
-			"resolution":   "2560x1440 (4 МП)",
-			"fps":          25,
-			"bitrate_kbps": 3840,
-			"gop":          50,
-			"audio_codec":  "G.711u (64 kbps)",
-			"auth_type":    "Digest Authentication",
-		})
-	}))
-
-	// 5. API: Stream Restart / Switch
-	http.HandleFunc("/api/stream", withCORS(func(w http.ResponseWriter, r *http.Request) {
-		id := r.URL.Query().Get("id")
-		streamType := r.URL.Query().Get("stream") // "main" | "sub"
-
-		stateMu.Lock()
-		for i := range cachedCameras {
-			if cachedCameras[i].ID == id {
-				if streamType == "main" || streamType == "sub" {
-					cachedCameras[i].ActiveStream = streamType
-				}
-				break
-			}
-		}
-		stateMu.Unlock()
-
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": true,
-			"id":      id,
-			"stream":  streamType,
-			"message": fmt.Sprintf("Поток камеры %s переключен на %s", id, strings.ToUpper(streamType)),
-		})
-	}))
-
-	// 6. Downloads: EXE for Windows, Linux binary and Manual PDF
+	// 9. Downloads: EXE for Windows, Linux binary and Manual PDF
 	http.HandleFunc("/download/windows", func(w http.ResponseWriter, r *http.Request) {
 		p := findViewerFile("ProCamViewer_Windows_x64.exe")
 		if p == "" {
@@ -564,7 +960,7 @@ func main() {
 		http.ServeFile(w, r, p)
 	})
 
-	// 7. Icon & Favicon
+	// 10. Icon & Favicon
 	http.HandleFunc("/icon.png", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
 		_, _ = w.Write(embeddedIconPNG)
@@ -574,7 +970,7 @@ func main() {
 		_, _ = w.Write(embeddedIconPNG)
 	})
 
-	// 8. Static Web Assets Server (SPA with embedded files or fallback)
+	// 11. Static Web Assets Server (SPA with embedded files or fallback)
 	webSubFS, err := fs.Sub(embeddedWebFS, "web")
 	hasWebBuild := false
 	if err == nil {
@@ -594,12 +990,10 @@ func main() {
 				fileServer.ServeHTTP(w, r)
 				return
 			}
-			// SPA fallback to index.html
 			r.URL.Path = "/"
 			fileServer.ServeHTTP(w, r)
 		})
 	} else {
-		// Fallback embedded UI
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, _ = w.Write([]byte(fallbackHTML))
@@ -644,78 +1038,39 @@ const fallbackHTML = `<!DOCTYPE html>
   :root {
     --bg: #0b0d12;
     --surface: #11151f;
-    --surface-card: #181d2a;
     --border: rgba(255, 255, 255, 0.08);
-    --border-subtle: #272f42;
     --text: #FFFFFF;
     --muted: #A1A1AA;
     --emerald: #10B981;
-    --emerald-hover: #34D399;
     --font-sans: 'Inter Variable', 'Inter', system-ui, -apple-system, sans-serif;
-    --font-mono: ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, 'DejaVu Sans Mono', monospace;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; font-family: var(--font-sans); }
   body {
     background-color: var(--bg);
-    background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px);
-    background-size: 24px 24px;
     color: var(--text);
     min-height: 100vh;
     display: flex;
     flex-direction: column;
-  }
-  header {
-    background: rgba(17, 21, 31, 0.95);
-    backdrop-filter: blur(12px);
-    border-bottom: 1px solid var(--border);
-    padding: 12px 24px;
-    display: flex;
     align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 12px;
+    justify-content: center;
+    text-align: center;
+    padding: 20px;
   }
-  .brand { display: flex; align-items: center; gap: 12px; }
-  .brand svg { width: 36px; height: 36px; }
-  .brand-title { font-size: 18px; font-weight: 900; letter-spacing: -0.02em; }
-  .brand-sub { font-size: 10px; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; }
-  .btn {
-    background: #181d2a;
-    color: #FFFFFF;
+  .card {
+    background: var(--surface);
     border: 1px solid var(--border);
-    padding: 7px 16px;
-    border-radius: 999px;
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.15s ease;
+    border-radius: 20px;
+    padding: 40px;
+    max-width: 540px;
   }
-  .btn:hover { border-color: var(--emerald); color: var(--emerald-hover); }
-  .btn-primary { background: var(--emerald); color: #09090B; border-color: var(--emerald); font-weight: 800; }
-  .btn-primary:hover { background: var(--emerald-hover); }
-  .wrap { max-width: 1400px; width: 100%; margin: 0 auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 20px; padding: 20px; }
+  h2 { font-size: 20px; margin-bottom: 12px; color: #FFFFFF; font-weight: 800; }
+  p { color: var(--muted); font-size: 13.5px; line-height: 1.6; }
 </style>
 </head>
 <body>
-  <header>
-    <div class="brand">
-      <img src="/icon.png" width="36" height="36" style="border-radius:9px;" alt="Logo" />
-      <div>
-        <div class="brand-title">PRO<span style="font-weight:400;color:var(--muted)">CAM</span> <span style="font-size:11px;padding:2px 8px;border-radius:999px;background:#09090B;color:var(--emerald);font-family:var(--font-mono)">VIEWER v4.1</span></div>
-        <div class="brand-sub">СИСТЕМЫ ВИДЕОНАБЛЮДЕНИЯ · ИНЖЕНЕРНЫЙ КОМПЛЕКС</div>
-      </div>
-    </div>
-    <div style="display:flex;gap:8px;">
-      <a class="btn" href="/download/manual" target="_blank">Инструкция (PDF)</a>
-      <a class="btn btn-primary" href="https://wa.me/77066066323" target="_blank">Поддержка ProCam</a>
-    </div>
-  </header>
-  <div class="wrap">
-    <div class="card" style="text-align:center;padding:48px 24px;">
-      <h2 style="font-size:22px;margin-bottom:12px;font-weight:800;">Фоновый стриминг-сервер ProCam Viewer активен</h2>
-      <p style="color:var(--muted);margin-bottom:20px;font-size:14px;">Для полной графической сборки интерфейса выполните <code>npm run build:web</code> и перезапустите бинарник.</p>
-    </div>
+  <div class="card">
+    <h2>Стриминг-сервер ProCam Viewer активен</h2>
+    <p>Для запуска полного графического интерфейса скомпилируйте веб-пакет командой <code>npm run build:web</code>.</p>
   </div>
 </body>
 </html>`
