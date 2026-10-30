@@ -1,4 +1,4 @@
-export type DeviceProtocol = 'hikvision' | 'dahua' | 'custom';
+export type DeviceProtocol = 'hikvision' | 'dahua' | 'onvif' | 'custom';
 export type DeviceType = 'camera' | 'nvr';
 
 export interface ChannelItem {

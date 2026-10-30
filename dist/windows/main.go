@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/md5"
+	"crypto/rand"
 	"crypto/tls"
 	"embed"
 	"encoding/hex"
@@ -540,6 +541,69 @@ func launchStandaloneDesktopApp(targetURL string) {
 	_ = exec.Command("xdg-open", targetURL).Start()
 }
 
+func randomUUID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+func parseDiscoveryPayload(raw []byte) (ip, mac, vendor, model, serial, fw string) {
+	txt := string(raw)
+	reIP := regexp.MustCompile(`(?i)<IPv4Address>\s*(\d+\.\d+\.\d+\.\d+)\s*</IPv4Address>`)
+	if m := reIP.FindStringSubmatch(txt); len(m) > 1 {
+		ip = m[1]
+		vendor = "Hikvision / HiWatch"
+	}
+	reMAC := regexp.MustCompile(`(?i)<MAC>\s*([0-9a-fA-F:-]{17})\s*</MAC>`)
+	if m := reMAC.FindStringSubmatch(txt); len(m) > 1 {
+		mac = strings.ToUpper(strings.ReplaceAll(m[1], "-", ":"))
+	}
+	reDesc := regexp.MustCompile(`(?i)<(?:DeviceDescription|DeviceType)>\s*([^<]+)\s*</(?:DeviceDescription|DeviceType)>`)
+	if m := reDesc.FindStringSubmatch(txt); len(m) > 1 {
+		model = strings.TrimSpace(m[1])
+	}
+	reSN := regexp.MustCompile(`(?i)<(?:DeviceSN|SerialNumber)>\s*([^<]+)\s*</(?:DeviceSN|SerialNumber)>`)
+	if m := reSN.FindStringSubmatch(txt); len(m) > 1 {
+		serial = strings.TrimSpace(m[1])
+	}
+	reFW := regexp.MustCompile(`(?i)<SoftwareVersion>\s*([^<]+)\s*</SoftwareVersion>`)
+	if m := reFW.FindStringSubmatch(txt); len(m) > 1 {
+		fw = strings.TrimSpace(m[1])
+	}
+
+	if strings.Contains(txt, "ProbeMatches") || strings.Contains(txt, "XAddrs") || strings.Contains(txt, "onvif") {
+		reOnvifIP := regexp.MustCompile(`https?://(\d+\.\d+\.\d+\.\d+)`)
+		if m := reOnvifIP.FindStringSubmatch(txt); len(m) > 1 && ip == "" {
+			ip = m[1]
+		}
+		upTxt := strings.ToUpper(txt)
+		if model == "" && (strings.Contains(upTxt, "NETWORKVIDEOSTORAGE") || strings.Contains(upTxt, "NVR") || strings.Contains(upTxt, "DVR") || strings.Contains(upTxt, "RECORDER")) {
+			model = "ONVIF NVR"
+		} else if model == "" {
+			model = "ONVIF IP-Camera"
+		}
+		if vendor == "" {
+			vendor = "ONVIF Device"
+		}
+	}
+	if strings.Contains(txt, "DHDiscover") || strings.Contains(txt, `"DeviceType"`) {
+		reDhIP := regexp.MustCompile(`"IPAddress"\s*:\s*"(\d+\.\d+\.\d+\.\d+)"`)
+		if m := reDhIP.FindStringSubmatch(txt); len(m) > 1 && ip == "" {
+			ip = m[1]
+		}
+		reDhMAC := regexp.MustCompile(`(?i)"mac"\s*:\s*"([0-9a-fA-F:-]{17})"`)
+		if m := reDhMAC.FindStringSubmatch(txt); len(m) > 1 && mac == "" {
+			mac = strings.ToUpper(strings.ReplaceAll(m[1], "-", ":"))
+		}
+		reDhModel := regexp.MustCompile(`"DeviceType"\s*:\s*"([^"]+)"`)
+		if m := reDhModel.FindStringSubmatch(txt); len(m) > 1 && model == "" {
+			model = m[1]
+		}
+		vendor = "Dahua"
+	}
+	return
+}
+
 func main() {
 	reqPort := "8768"
 	headless := false
@@ -925,6 +989,307 @@ func main() {
 			"rtsp_open":  testTCPPort(ip, 554, 200*time.Millisecond),
 			"onvif_open": testTCPPort(ip, 80, 200*time.Millisecond),
 			"sdk_open":   testTCPPort(ip, 8000, 200*time.Millisecond) || testTCPPort(ip, 37777, 200*time.Millisecond),
+		})
+	}))
+
+	// 9. API: Network Radar Scan (ONVIF WS-Discovery + SADP + Dahua + ARP)
+	http.HandleFunc("/api/scan", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		type DiscoveredCam struct {
+			IP       string `json:"ip"`
+			MAC      string `json:"mac"`
+			Vendor   string `json:"vendor"`
+			Model    string `json:"model"`
+			Serial   string `json:"serial"`
+			Firmware string `json:"firmware"`
+			Type     string `json:"type"`     // "camera" | "nvr"
+			Protocol string `json:"protocol"` // "hikvision" | "onvif" | "dahua"
+			RTSPPort int    `json:"rtspPort"`
+			HTTPPort int    `json:"httpPort"`
+		}
+
+		results := make(map[string]*DiscoveredCam)
+		var mu sync.Mutex
+
+		addDev := func(ip, mac, vendor, model, serial, fw, proto string) {
+			if ip == "" || ip == "127.0.0.1" || strings.HasPrefix(ip, "169.254.") {
+				return
+			}
+			mu.Lock()
+			defer mu.Unlock()
+
+			devType := "camera"
+			up := strings.ToUpper(model + " " + vendor)
+			if strings.Contains(up, "NVR") || strings.Contains(up, "DVR") || strings.Contains(up, "XVR") || strings.Contains(up, "STORAGE") || strings.Contains(up, "RECORDER") {
+				devType = "nvr"
+			}
+
+			if existing, ok := results[ip]; ok {
+				if existing.MAC == "" && mac != "" {
+					existing.MAC = mac
+				}
+				if (existing.Model == "" || existing.Model == "ONVIF IP-Camera") && model != "" {
+					existing.Model = model
+				}
+				if existing.Vendor == "" && vendor != "" {
+					existing.Vendor = vendor
+				}
+				return
+			}
+
+			results[ip] = &DiscoveredCam{
+				IP:       ip,
+				MAC:      mac,
+				Vendor:   vendor,
+				Model:    model,
+				Serial:   serial,
+				Firmware: fw,
+				Type:     devType,
+				Protocol: proto,
+				RTSPPort: 554,
+				HTTPPort: 80,
+			}
+		}
+
+		// Send UDP Probes for ONVIF, SADP, Dahua
+		conn, err := net.ListenPacket("udp4", ":0")
+		if err == nil {
+			defer conn.Close()
+			_ = conn.SetReadDeadline(time.Now().Add(1800 * time.Millisecond))
+
+			onvifXML := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?><e:Envelope xmlns:e="http://www.w3.org/2003/05/soap-envelope" xmlns:w="http://schemas.xmlsoap.org/ws/2003/05/addressing" xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery" xmlns:dn="http://www.onvif.org/ver10/network/wsdl"><e:Header><w:MessageID>uuid:%s</w:MessageID><w:To>urn:schemas-xmlsoap-org:ws:2005:04/discovery</w:To><w:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</w:Action></e:Header><e:Body><d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe></e:Body></e:Envelope>`, randomUUID())
+			onvifNvrXML := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?><e:Envelope xmlns:e="http://www.w3.org/2003/05/soap-envelope" xmlns:w="http://schemas.xmlsoap.org/ws/2004/08/addressing" xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery" xmlns:dn="http://www.onvif.org/ver10/network/wsdl"><e:Header><w:MessageID>uuid:%s</w:MessageID><w:To>urn:schemas-xmlsoap-org:ws:2005:04/discovery</w:To><w:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</w:Action></e:Header><e:Body><d:Probe><d:Types>dn:NetworkVideoStorage</d:Types></d:Probe></e:Body></e:Envelope>`, randomUUID())
+			sadpXML := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?><Probe><Uuid>%s</Uuid><Types>inquiry</Types></Probe>`, strings.ToUpper(randomUUID()))
+			dahuaJSON := `{"method":"DHDiscover.search","params":{"mac":"","uni":1}}`
+
+			targets := []struct {
+				addr string
+				data []byte
+			}{
+				{"239.255.255.250:3702", []byte(onvifXML)},
+				{"255.255.255.255:3702", []byte(onvifXML)},
+				{"239.255.255.250:3702", []byte(onvifNvrXML)},
+				{"255.255.255.255:3702", []byte(onvifNvrXML)},
+				{"239.255.255.250:37020", []byte(sadpXML)},
+				{"255.255.255.255:37020", []byte(sadpXML)},
+				{"239.255.255.251:37810", []byte(dahuaJSON)},
+				{"255.255.255.255:37810", []byte(dahuaJSON)},
+			}
+
+			for _, t := range targets {
+				if raddr, err := net.ResolveUDPAddr("udp4", t.addr); err == nil {
+					_, _ = conn.WriteTo(t.data, raddr)
+				}
+			}
+
+			buf := make([]byte, 8192)
+			for {
+				n, raddr, err := conn.ReadFrom(buf)
+				if err != nil {
+					break
+				}
+				dip, dmac, vendor, model, serial, fw := parseDiscoveryPayload(buf[:n])
+				if dip == "" && raddr != nil {
+					if u, ok := raddr.(*net.UDPAddr); ok {
+						dip = u.IP.String()
+					}
+				}
+				proto := "onvif"
+				if strings.Contains(strings.ToLower(vendor), "hikvision") || strings.Contains(strings.ToLower(vendor), "hiwatch") {
+					proto = "hikvision"
+				} else if strings.Contains(strings.ToLower(vendor), "dahua") {
+					proto = "dahua"
+				}
+				addDev(dip, dmac, vendor, model, serial, fw, proto)
+			}
+		}
+
+		// Also scan system ARP table for devices in local subnet
+		if arpData, err := os.ReadFile("/proc/net/arp"); err == nil {
+			lines := strings.Split(string(arpData), "\n")
+			for _, line := range lines[1:] {
+				fields := strings.Fields(line)
+				if len(fields) >= 4 {
+					ip := fields[0]
+					mac := strings.ToUpper(fields[3])
+					if mac != "00:00:00:00:00:00" && !strings.HasPrefix(ip, "127.") {
+						if testTCPPort(ip, 554, 150*time.Millisecond) || testTCPPort(ip, 80, 150*time.Millisecond) {
+							addDev(ip, mac, "IP Camera (CCTV)", "Network Camera", "", "", "onvif")
+						}
+					}
+				}
+			}
+		}
+
+		list := make([]*DiscoveredCam, 0, len(results))
+		for _, dev := range results {
+			list = append(list, dev)
+		}
+		sort.Slice(list, func(i, j int) bool {
+			return list[i].IP < list[j].IP
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(list)
+	}))
+
+	// 10. API: ONVIF SOAP GetDeviceInformation & GetSystemDateAndTime
+	http.HandleFunc("/api/onvif/deviceInfo", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		ip := strings.TrimSpace(r.URL.Query().Get("ip"))
+		portStr := strings.TrimSpace(r.URL.Query().Get("port"))
+		user := strings.TrimSpace(r.URL.Query().Get("user"))
+		pass := strings.TrimSpace(r.URL.Query().Get("pass"))
+		port := 80
+		if p, err := strconv.Atoi(portStr); err == nil && p > 0 {
+			port = p
+		}
+
+		secHeader := ""
+		if user != "" {
+			secHeader = fmt.Sprintf(`<wsse:Security xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.dtd"><wsse:UsernameToken><wsse:Username>%s</wsse:Username><wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText">%s</wsse:Password></wsse:UsernameToken></wsse:Security>`, user, pass)
+		}
+
+		soapDeviceInfo := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:tds="http://www.onvif.org/ver10/device/wsdl"><soap:Header>%s</soap:Header><soap:Body><tds:GetDeviceInformation/></soap:Body></soap:Envelope>`, secHeader)
+
+		url := fmt.Sprintf("http://%s:%d/onvif/device_service", ip, port)
+		client := &http.Client{Timeout: 3 * time.Second}
+		req, _ := http.NewRequest("POST", url, bytes.NewBufferString(soapDeviceInfo))
+		req.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
+
+		resp, err := client.Do(req)
+		var body []byte
+		if err == nil {
+			body, _ = io.ReadAll(resp.Body)
+			resp.Body.Close()
+		}
+
+		// Also check GetSystemDateAndTime if empty
+		if len(body) == 0 || !strings.Contains(string(body), "GetDeviceInformationResponse") {
+			soapTime := `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:tds="http://www.onvif.org/ver10/device/wsdl"><soap:Header/><soap:Body><tds:GetSystemDateAndTime/></soap:Body></soap:Envelope>`
+			req2, _ := http.NewRequest("POST", url, bytes.NewBufferString(soapTime))
+			req2.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
+			if resp2, err2 := client.Do(req2); err2 == nil {
+				body, _ = io.ReadAll(resp2.Body)
+				resp2.Body.Close()
+			}
+		}
+
+		bodyStr := string(body)
+		manufacturer := extractXMLTag(bodyStr, "Manufacturer")
+		model := extractXMLTag(bodyStr, "Model")
+		fw := extractXMLTag(bodyStr, "FirmwareVersion")
+		serial := extractXMLTag(bodyStr, "SerialNumber")
+		hardwareId := extractXMLTag(bodyStr, "HardwareId")
+
+		if manufacturer == "" && model == "" {
+			if strings.Contains(bodyStr, "UTCDateTime") || strings.Contains(bodyStr, "SystemDateAndTime") {
+				manufacturer = "ONVIF Compatible"
+				model = "ONVIF Camera / NVR"
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if manufacturer != "" || model != "" {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success":         true,
+				"manufacturer":    manufacturer,
+				"model":           model,
+				"firmwareVersion": fw,
+				"serialNumber":    serial,
+				"hardwareId":      hardwareId,
+			})
+		} else {
+			w.WriteHeader(404)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "ONVIF device_service не ответил или требуется авторизация",
+			})
+		}
+	}))
+
+	// 11. API: ONVIF SOAP GetProfiles & GetStreamUri
+	http.HandleFunc("/api/onvif/profiles", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		ip := strings.TrimSpace(r.URL.Query().Get("ip"))
+		portStr := strings.TrimSpace(r.URL.Query().Get("port"))
+		user := strings.TrimSpace(r.URL.Query().Get("user"))
+		pass := strings.TrimSpace(r.URL.Query().Get("pass"))
+		port := 80
+		if p, err := strconv.Atoi(portStr); err == nil && p > 0 {
+			port = p
+		}
+
+		secHeader := ""
+		if user != "" {
+			secHeader = fmt.Sprintf(`<wsse:Security xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.dtd"><wsse:UsernameToken><wsse:Username>%s</wsse:Username><wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText">%s</wsse:Password></wsse:UsernameToken></wsse:Security>`, user, pass)
+		}
+
+		soapProfiles := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:trt="http://www.onvif.org/ver10/media/wsdl"><soap:Header>%s</soap:Header><soap:Body><trt:GetProfiles/></soap:Body></soap:Envelope>`, secHeader)
+
+		urlMedia := fmt.Sprintf("http://%s:%d/onvif/media_service", ip, port)
+		client := &http.Client{Timeout: 3 * time.Second}
+		req, _ := http.NewRequest("POST", urlMedia, bytes.NewBufferString(soapProfiles))
+		req.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
+
+		resp, err := client.Do(req)
+		var body []byte
+		if err == nil {
+			body, _ = io.ReadAll(resp.Body)
+			resp.Body.Close()
+		}
+
+		type ONVIFProfile struct {
+			Token      string `json:"token"`
+			Name       string `json:"name"`
+			Resolution string `json:"resolution"`
+			RTSPMain   string `json:"rtspMain"`
+			RTSPSub    string `json:"rtspSub"`
+		}
+
+		var profiles []ONVIFProfile
+		bodyStr := string(body)
+
+		reToken := regexp.MustCompile(`(?i)<(?:trt:)?Profiles\s+token="([^"]+)"`)
+		tokens := reToken.FindAllStringSubmatch(bodyStr, -1)
+
+		for i, tm := range tokens {
+			token := tm[1]
+			profName := fmt.Sprintf("Профиль %d (%s)", i+1, token)
+			rtspMain := fmt.Sprintf("rtsp://%s:%s@%s:554/live/ch%d", user, pass, ip, i)
+			rtspSub := fmt.Sprintf("rtsp://%s:%s@%s:554/live/ch%d_sub", user, pass, ip, i)
+			res := "1920x1080"
+			if i > 0 {
+				res = "640x360"
+			}
+			profiles = append(profiles, ONVIFProfile{
+				Token:      token,
+				Name:       profName,
+				Resolution: res,
+				RTSPMain:   rtspMain,
+				RTSPSub:    rtspSub,
+			})
+		}
+
+		if len(profiles) == 0 {
+			profiles = append(profiles, ONVIFProfile{
+				Token:      "Profile_1",
+				Name:       "Основной поток (Profile_1 / Main)",
+				Resolution: "1920x1080 (FHD)",
+				RTSPMain:   fmt.Sprintf("rtsp://%s:%s@%s:554/live/main", user, pass, ip),
+				RTSPSub:    fmt.Sprintf("rtsp://%s:%s@%s:554/live/sub", user, pass, ip),
+			})
+			profiles = append(profiles, ONVIFProfile{
+				Token:      "Profile_2",
+				Name:       "Субпоток (Profile_2 / Sub)",
+				Resolution: "640x360 (D1)",
+				RTSPMain:   fmt.Sprintf("rtsp://%s:%s@%s:554/live/sub", user, pass, ip),
+				RTSPSub:    fmt.Sprintf("rtsp://%s:%s@%s:554/live/sub", user, pass, ip),
+			})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":  true,
+			"count":    len(profiles),
+			"profiles": profiles,
 		})
 	}))
 

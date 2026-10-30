@@ -306,7 +306,7 @@ export const App: React.FC = () => {
     addLog('INFO', `Сетка заполнена ${newCells.length} каналами регистратора ${device.name}.`);
   };
 
-  // Network Scan
+  // Network Scan (ONVIF WS-Discovery + SADP + Dahua)
   const handleScan = async () => {
     setIsScanning(true);
     addLog('INFO', 'Запущен радар сканирования сети (ONVIF WS-Discovery, Hikvision SADP, Dahua DHIP)...');
@@ -317,6 +317,53 @@ export const App: React.FC = () => {
         const found = await res.json();
         if (Array.isArray(found) && found.length > 0) {
           addLog('SUCCESS', `Сканирование завершено: обнаружено ${found.length} активных IP-устройств в подсети.`);
+          found.forEach((f: any) => {
+            addLog(
+              'NET',
+              `[${(f.protocol || 'onvif').toUpperCase()}] ${f.vendor || 'IP-камера'} ${f.model || ''} на ${f.ip} (HTTP: ${f.httpPort || 80}, RTSP: ${f.rtspPort || 554})`
+            );
+          });
+
+          // If device list was empty, automatically add the discovered devices to park
+          if (devices.length === 0) {
+            const newDevs: DeviceItem[] = found.map((f: any, idx: number) => ({
+              id: `scanned-${idx}-${Date.now()}`,
+              name: f.model ? `${f.vendor || 'Камера'} ${f.model}` : `${f.vendor || 'IP-Камера'} (${f.ip})`,
+              type: f.type || 'camera',
+              protocol: f.protocol || 'onvif',
+              ip: f.ip,
+              httpPort: f.httpPort || 80,
+              rtspPort: f.rtspPort || 554,
+              login: 'admin',
+              password: '',
+              channelsCount: 1,
+              channels: [
+                {
+                  id: `scanned-${idx}-ch1`,
+                  channelNumber: 1,
+                  channelIdHik: '101',
+                  name: 'Основной поток (Канал 1)',
+                  enabled: true,
+                  rtspMain: `rtsp://admin:@${f.ip}:${f.rtspPort || 554}/live/main`,
+                  rtspSub: `rtsp://admin:@${f.ip}:${f.rtspPort || 554}/live/sub`,
+                  activeStream: 'main',
+                  status: 'online',
+                  pingMs: 1.5,
+                  resolution: '1920x1080',
+                  codec: 'H.264 / H.265',
+                },
+              ],
+              status: 'online',
+              pingMs: 1.5,
+              model: f.model || 'ONVIF Device',
+              serial: f.serial || '',
+              firmware: f.firmware || '',
+              expanded: true,
+            }));
+            syncDevices(newDevs);
+            populateInitialGrid(newDevs);
+            addLog('SUCCESS', `Обнаруженные камеры (${newDevs.length} шт.) добавлены в рабочую область.`);
+          }
         } else {
           addLog('INFO', 'Сканирование завершено. Новых неавторизованных устройств не обнаружено.');
         }
@@ -337,7 +384,7 @@ export const App: React.FC = () => {
         const data = await res.json();
         addLog(
           'NET',
-          `Узел ${ip}: Пинг ${data.ping_ms} мс · Порты 554(RTSP)=${data.rtsp_open ? 'OK' : 'Закрыт'}, 80(ISAPI)=${data.onvif_open ? 'OK' : 'Закрыт'}`
+          `Узел ${ip}: Пинг ${data.ping_ms} мс · Порты 554(RTSP)=${data.rtsp_open ? 'OK' : 'Закрыт'}, 80(ONVIF/ISAPI)=${data.onvif_open ? 'OK' : 'Закрыт'}`
         );
         setDevices((prev) =>
           prev.map((d) => (d.ip === ip ? { ...d, pingMs: data.ping_ms, status: data.status } : d))
@@ -348,8 +395,41 @@ export const App: React.FC = () => {
     }
   };
 
-  // Check ISAPI Auth & Model
+  // Check ONVIF / ISAPI Auth & Model
   const handleApplyAuth = async (ip: string, user: string, pass: string, port = 80) => {
+    const dev = devices.find((d) => d.ip === ip);
+    const isONVIF = dev ? dev.protocol === 'onvif' : true;
+
+    if (isONVIF) {
+      addLog('ISAPI', `Проверка авторизации ONVIF SOAP для ${ip} (user: ${user})...`);
+      try {
+        const res = await fetch(
+          `/api/onvif/deviceInfo?ip=${encodeURIComponent(ip)}&user=${encodeURIComponent(user)}&pass=${encodeURIComponent(pass)}&port=${port}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          addLog(
+            'SUCCESS',
+            `ONVIF SOAP подтвержден! Производитель: ${data.manufacturer || 'ONVIF'}, Модель: ${data.model || 'Device'}, Прошивка: ${data.firmwareVersion || 'v1.x'}`
+          );
+          setDevices((prev) =>
+            prev.map((d) =>
+              d.ip === ip
+                ? {
+                    ...d,
+                    model: data.model || d.model,
+                    serial: data.serialNumber || d.serial,
+                    firmware: data.firmwareVersion || d.firmware,
+                    status: 'online',
+                  }
+                : d
+            )
+          );
+          return;
+        }
+      } catch (e) {}
+    }
+
     addLog('ISAPI', `Запрос сведений устройства /ISAPI/System/deviceInfo для ${ip} (Digest Auth)...`);
     try {
       const res = await fetch(
@@ -361,7 +441,6 @@ export const App: React.FC = () => {
           'SUCCESS',
           `ISAPI подтвержден! Модель: ${data.model || 'Hikvision Device'}, Прошивка: ${data.firmwareVersion || 'v4.x'}, SN: ${data.serialNumber || 'N/A'}`
         );
-        // update device info
         setDevices((prev) =>
           prev.map((d) =>
             d.ip === ip
@@ -376,10 +455,10 @@ export const App: React.FC = () => {
           )
         );
       } else {
-        addLog('WARN', `Ошибка авторизации ISAPI для ${ip}: HTTP ${res.status}. Проверьте логин и пароль.`);
+        addLog('WARN', `Ошибка авторизации ISAPI/ONVIF для ${ip}: HTTP ${res.status}. Проверьте логин и пароль.`);
       }
     } catch (e) {
-      addLog('WARN', `Не удалось связаться с ISAPI-сервисом на ${ip}:${port}.`);
+      addLog('WARN', `Не удалось связаться с сервисом на ${ip}:${port}.`);
     }
   };
 

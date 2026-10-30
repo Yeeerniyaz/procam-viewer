@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { DeviceItem, ChannelItem, DeviceProtocol, DeviceType } from '../types';
-import { X, Plus, Activity, RefreshCw, Check, Server, Video, ShieldCheck, Eye, EyeOff } from 'lucide-react';
+import { X, Plus, Activity, RefreshCw, Check, Server, Video, ShieldCheck, Eye, EyeOff, Radio } from 'lucide-react';
 
 interface Props {
   isOpen: boolean;
@@ -12,15 +12,15 @@ export const AddDeviceModal: React.FC<Props> = ({ isOpen, onClose, onSaveDevice 
   if (!isOpen) return null;
 
   const [type, setType] = useState<DeviceType>('camera');
-  const [protocol, setProtocol] = useState<DeviceProtocol>('hikvision');
-  const [name, setName] = useState('Входная группа');
+  const [protocol, setProtocol] = useState<DeviceProtocol>('onvif');
+  const [name, setName] = useState('IP-Камера (ONVIF)');
   const [ip, setIp] = useState('192.168.1.64');
   const [httpPort, setHttpPort] = useState('80');
   const [rtspPort, setRtspPort] = useState('554');
   const [login, setLogin] = useState('admin');
   const [password, setPassword] = useState('12345');
   const [showPassword, setShowPassword] = useState(false);
-  const [channelsCount, setChannelsCount] = useState<number>(4);
+  const [channelsCount, setChannelsCount] = useState<number>(1);
 
   // Channels state
   const [channels, setChannels] = useState<ChannelItem[]>([
@@ -28,15 +28,15 @@ export const AddDeviceModal: React.FC<Props> = ({ isOpen, onClose, onSaveDevice 
       id: 'ch-1',
       channelNumber: 1,
       channelIdHik: '101',
-      name: 'Канал 1: Входная группа',
+      name: 'Основной поток (Profile_1)',
       enabled: true,
-      rtspMain: 'rtsp://admin:12345@192.168.1.64:554/Streaming/Channels/101',
-      rtspSub: 'rtsp://admin:12345@192.168.1.64:554/Streaming/Channels/102',
+      rtspMain: 'rtsp://admin:12345@192.168.1.64:554/live/main',
+      rtspSub: 'rtsp://admin:12345@192.168.1.64:554/live/sub',
       activeStream: 'main',
       status: 'checking',
       pingMs: 0,
-      resolution: '2560x1440',
-      codec: 'H.265+',
+      resolution: '1920x1080',
+      codec: 'H.264 / H.265',
     },
   ]);
 
@@ -48,17 +48,25 @@ export const AddDeviceModal: React.FC<Props> = ({ isOpen, onClose, onSaveDevice 
   const [isPolling, setIsPolling] = useState(false);
 
   // Helper: regenerate channels based on count, protocol, ip, login, pass, rtspPort
-  const generateChannels = (count: number) => {
+  const generateChannels = (count: number, currentProto: DeviceProtocol = protocol) => {
     const list: ChannelItem[] = [];
     const port = parseInt(rtspPort, 10) || 554;
     for (let i = 1; i <= count; i++) {
       let mainURL = `rtsp://${login}:${password}@${ip}:${port}/Streaming/Channels/${i}01`;
       let subURL = `rtsp://${login}:${password}@${ip}:${port}/Streaming/Channels/${i}02`;
 
-      if (protocol === 'dahua') {
+      if (currentProto === 'onvif') {
+        if (count === 1) {
+          mainURL = `rtsp://${login}:${password}@${ip}:${port}/live/main`;
+          subURL = `rtsp://${login}:${password}@${ip}:${port}/live/sub`;
+        } else {
+          mainURL = `rtsp://${login}:${password}@${ip}:${port}/live/ch${i}`;
+          subURL = `rtsp://${login}:${password}@${ip}:${port}/live/ch${i}_sub`;
+        }
+      } else if (currentProto === 'dahua') {
         mainURL = `rtsp://${login}:${password}@${ip}:${port}/cam/realmonitor?channel=${i}&subtype=0`;
         subURL = `rtsp://${login}:${password}@${ip}:${port}/cam/realmonitor?channel=${i}&subtype=1`;
-      } else if (protocol === 'custom') {
+      } else if (currentProto === 'custom') {
         mainURL = `rtsp://${login}:${password}@${ip}:${port}/live/ch${i}`;
         subURL = `rtsp://${login}:${password}@${ip}:${port}/live/ch${i}_sub`;
       }
@@ -67,75 +75,139 @@ export const AddDeviceModal: React.FC<Props> = ({ isOpen, onClose, onSaveDevice 
         id: `ch-${i}-${Date.now()}`,
         channelNumber: i,
         channelIdHik: `${i}01`,
-        name: `Канал ${i}`,
+        name: count === 1 ? 'Основной поток (Канал 1)' : `Канал ${i}`,
         enabled: true,
         rtspMain: mainURL,
         rtspSub: subURL,
         activeStream: 'main',
         status: 'checking',
         pingMs: 0,
-        resolution: '2560x1440',
+        resolution: '1920x1080',
         codec: 'H.265+',
       });
     }
     return list;
   };
 
+  const handleProtocolChange = (newProto: DeviceProtocol) => {
+    setProtocol(newProto);
+    if (newProto === 'onvif') {
+      setName(type === 'nvr' ? 'Видеорегистратор ONVIF NVR' : 'IP-Камера (ONVIF)');
+    } else if (newProto === 'hikvision') {
+      setName(type === 'nvr' ? 'Hikvision NVR' : 'Hikvision IP-Камера');
+    } else if (newProto === 'dahua') {
+      setName(type === 'nvr' ? 'Dahua NVR' : 'Dahua IP-Камера');
+    }
+    setChannels(generateChannels(channelsCount, newProto));
+  };
+
   const handleTypeChange = (newType: DeviceType) => {
     setType(newType);
     if (newType === 'camera') {
-      setName('IP-Камера (Склад)');
+      setName(protocol === 'onvif' ? 'IP-Камера (ONVIF)' : 'IP-Камера (Вход)');
       setChannelsCount(1);
-      setChannels(generateChannels(1));
+      setChannels(generateChannels(1, protocol));
     } else {
-      setName('Видеорегистратор NVR-8');
+      setName(protocol === 'onvif' ? 'Видеорегистратор ONVIF NVR' : 'Видеорегистратор NVR-8');
       setChannelsCount(8);
-      setChannels(generateChannels(8));
+      setChannels(generateChannels(8, protocol));
     }
   };
 
   const handleCountChange = (count: number) => {
     setChannelsCount(count);
-    setChannels(generateChannels(count));
+    setChannels(generateChannels(count, protocol));
   };
 
-  // Test connection via ISAPI
+  // Test connection (supports ONVIF SOAP and Hikvision ISAPI)
   const handleTestConnection = async () => {
     setIsTesting(true);
     setTestResult(null);
+
+    const endpoint = protocol === 'onvif' ? '/api/onvif/deviceInfo' : '/api/isapi/deviceInfo';
+
     try {
       const res = await fetch(
-        `/api/isapi/deviceInfo?ip=${encodeURIComponent(ip)}&port=${encodeURIComponent(httpPort)}&user=${encodeURIComponent(login)}&pass=${encodeURIComponent(password)}`
+        `${endpoint}?ip=${encodeURIComponent(ip)}&port=${encodeURIComponent(httpPort)}&user=${encodeURIComponent(login)}&pass=${encodeURIComponent(password)}`
       );
       const data = await res.json();
       if (data.success) {
+        const title = data.manufacturer || data.model || (protocol === 'onvif' ? 'ONVIF Device' : 'Hikvision Device');
         setTestResult({
           success: true,
-          message: `✔ Устройство доступно: ${data.name || 'Hikvision'} (${data.model || 'ISAPI Device'}), Серийный №: ${data.serial || '-'}`,
+          message: `✔ Устройство найдено: ${title} (${data.model || 'CCTV'}), SN: ${data.serialNumber || data.serial || 'N/A'}, Прошивка: ${data.firmwareVersion || 'v4.x'}`,
           details: data,
         });
-        if (data.name && name === 'Входная группа') {
-          setName(data.name);
+        if (data.model) {
+          setName(`${title} ${data.model}`);
         }
       } else {
         setTestResult({
           success: false,
-          message: data.error || 'Ошибка подключения к устройству',
+          message: data.error || 'Ошибка подключения к устройству. Проверьте IP, порт и логин/пароль.',
         });
       }
     } catch (err: any) {
       setTestResult({
         success: false,
-        message: `Ошибка связи с локальным сервером: ${err.message}`,
+        message: `Ошибка связи с локальным шлюзом: ${err.message}`,
       });
     } finally {
       setIsTesting(false);
     }
   };
 
-  // Auto-discover channels via ISAPI
+  // Auto-discover channels / profiles (ONVIF SOAP or Hikvision ISAPI)
   const handleAutoPollChannels = async () => {
     setIsPolling(true);
+    setTestResult(null);
+
+    if (protocol === 'onvif') {
+      // Poll ONVIF GetProfiles
+      try {
+        const res = await fetch(
+          `/api/onvif/profiles?ip=${encodeURIComponent(ip)}&port=${encodeURIComponent(httpPort)}&user=${encodeURIComponent(login)}&pass=${encodeURIComponent(password)}`
+        );
+        const data = await res.json();
+        if (data.success && Array.isArray(data.profiles) && data.profiles.length > 0) {
+          const polledList: ChannelItem[] = data.profiles.map((p: any, idx: number) => ({
+            id: `onvif-prof-${idx + 1}-${Date.now()}`,
+            channelNumber: idx + 1,
+            channelIdHik: `${idx + 1}01`,
+            name: p.name || `Профиль ${idx + 1}`,
+            enabled: true,
+            rtspMain: p.rtspMain,
+            rtspSub: p.rtspSub,
+            activeStream: 'main',
+            status: 'online',
+            pingMs: 1.5,
+            resolution: p.resolution || '1920x1080',
+            codec: 'H.264 / H.265 (ONVIF)',
+          }));
+          setChannels(polledList);
+          setChannelsCount(polledList.length);
+          setTestResult({
+            success: true,
+            message: `✔ ONVIF SOAP: Успешно получено ${polledList.length} профилей видеопотоков (Profile S / G).`,
+          });
+        } else {
+          setTestResult({
+            success: false,
+            message: 'Камера не ответила на ONVIF GetProfiles. Проверьте авторизацию WS-Security.',
+          });
+        }
+      } catch (e: any) {
+        setTestResult({
+          success: false,
+          message: `Ошибка ONVIF GetProfiles: ${e.message}`,
+        });
+      } finally {
+        setIsPolling(false);
+      }
+      return;
+    }
+
+    // Otherwise Hikvision ISAPI channels
     try {
       const res = await fetch(
         `/api/isapi/channels?ip=${encodeURIComponent(ip)}&port=${encodeURIComponent(httpPort)}&user=${encodeURIComponent(login)}&pass=${encodeURIComponent(password)}&rtspPort=${encodeURIComponent(rtspPort)}`
@@ -211,9 +283,9 @@ export const AddDeviceModal: React.FC<Props> = ({ isOpen, onClose, onSaveDevice 
       })),
       status: 'online',
       pingMs: 1.5,
-      model: testResult?.details?.model || (protocol === 'hikvision' ? 'Hikvision ISAPI' : 'RTSP Device'),
-      serial: testResult?.details?.serial || '',
-      firmware: testResult?.details?.firmware || '',
+      model: testResult?.details?.model || (protocol === 'onvif' ? 'ONVIF Profile S' : protocol === 'hikvision' ? 'Hikvision ISAPI' : 'RTSP Device'),
+      serial: testResult?.details?.serialNumber || testResult?.details?.serial || '',
+      firmware: testResult?.details?.firmwareVersion || testResult?.details?.firmware || '',
       expanded: true,
     };
 
@@ -223,13 +295,13 @@ export const AddDeviceModal: React.FC<Props> = ({ isOpen, onClose, onSaveDevice 
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-window" style={{ maxWidth: '780px' }} onClick={(e) => e.stopPropagation()}>
+      <div className="modal-window" style={{ maxWidth: '800px' }} onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)', paddingBottom: '14px', marginBottom: '16px' }}>
           <div>
             <span className="eyebrow">// ДОБАВЛЕНИЕ УСТРОЙСТВА ВИДЕОНАБЛЮДЕНИЯ</span>
             <h3 style={{ fontSize: '18px', fontWeight: 800, marginTop: '2px', color: '#FFFFFF' }}>
-              Подключение IP-камеры или многоканального NVR (Hikvision ISAPI / RTSP)
+              Подключение IP-камеры или многоканального NVR (ONVIF · ISAPI · RTSP)
             </h3>
           </div>
           <button className="btn-pill" style={{ padding: '6px' }} onClick={onClose}>
@@ -259,7 +331,7 @@ export const AddDeviceModal: React.FC<Props> = ({ isOpen, onClose, onSaveDevice 
             <Video size={22} color={type === 'camera' ? '#10B981' : '#A1A1AA'} />
             <div>
               <div style={{ fontWeight: 800, fontSize: '13px' }}>IP-Камера (1 канал)</div>
-              <div style={{ fontSize: '11px', color: 'var(--muted)' }}>Автономная камера видеонаблюдения</div>
+              <div style={{ fontSize: '11px', color: 'var(--muted)' }}>Автономная IP-камера (ONVIF Profile S / Hikvision)</div>
             </div>
           </button>
 
@@ -291,26 +363,33 @@ export const AddDeviceModal: React.FC<Props> = ({ isOpen, onClose, onSaveDevice 
         {/* Protocol selection */}
         <div style={{ marginBottom: '16px' }}>
           <label style={{ fontSize: '11px', color: 'var(--muted)', fontWeight: 600, display: 'block', marginBottom: '6px' }}>
-            Протокол интеграции:
+            Протокол интеграции устройства:
           </label>
-          <div className="tabs-container">
+          <div className="tabs-container" style={{ flexWrap: 'wrap' }}>
+            <button
+              className={`tab-pill ${protocol === 'onvif' ? 'active' : ''}`}
+              onClick={() => handleProtocolChange('onvif')}
+              style={{ fontWeight: 700 }}
+            >
+              ONVIF (Profile S / G / T)
+            </button>
             <button
               className={`tab-pill ${protocol === 'hikvision' ? 'active' : ''}`}
-              onClick={() => setProtocol('hikvision')}
+              onClick={() => handleProtocolChange('hikvision')}
             >
               Hikvision (ISAPI / RTSP)
             </button>
             <button
               className={`tab-pill ${protocol === 'dahua' ? 'active' : ''}`}
-              onClick={() => setProtocol('dahua')}
+              onClick={() => handleProtocolChange('dahua')}
             >
               Dahua (RTSP / CGI)
             </button>
             <button
               className={`tab-pill ${protocol === 'custom' ? 'active' : ''}`}
-              onClick={() => setProtocol('custom')}
+              onClick={() => handleProtocolChange('custom')}
             >
-              Пользовательский RTSP
+              Custom RTSP URL
             </button>
           </div>
         </div>
@@ -325,7 +404,7 @@ export const AddDeviceModal: React.FC<Props> = ({ isOpen, onClose, onSaveDevice 
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Офис Hikvision NVR-16"
+              placeholder="ONVIF IP-Камера (Вход)"
               style={{
                 width: '100%',
                 padding: '8px 12px',
@@ -363,7 +442,7 @@ export const AddDeviceModal: React.FC<Props> = ({ isOpen, onClose, onSaveDevice 
 
           <div>
             <label style={{ fontSize: '11px', color: 'var(--muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
-              HTTP / ISAPI порт:
+              {protocol === 'onvif' ? 'ONVIF / HTTP порт (80/8000/8080/8899):' : 'HTTP / ISAPI порт:'}
             </label>
             <input
               type="number"
@@ -385,7 +464,7 @@ export const AddDeviceModal: React.FC<Props> = ({ isOpen, onClose, onSaveDevice 
 
           <div>
             <label style={{ fontSize: '11px', color: 'var(--muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
-              RTSP порт видеопотока:
+              RTSP порт видеопотока (обычно 554):
             </label>
             <input
               type="number"
@@ -407,7 +486,7 @@ export const AddDeviceModal: React.FC<Props> = ({ isOpen, onClose, onSaveDevice 
 
           <div>
             <label style={{ fontSize: '11px', color: 'var(--muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
-              Логин:
+              Логин (ONVIF / RTSP):
             </label>
             <input
               type="text"
@@ -474,21 +553,23 @@ export const AddDeviceModal: React.FC<Props> = ({ isOpen, onClose, onSaveDevice 
             disabled={isTesting}
           >
             {isTesting ? <RefreshCw size={13} className="animate-spin" /> : <Activity size={13} />}
-            {isTesting ? 'Проверка связи...' : 'Проверить подключение (ISAPI тест)'}
+            {isTesting ? 'Проверка связи...' : protocol === 'onvif' ? 'Проверить ONVIF (SOAP)' : 'Проверить ISAPI тест'}
           </button>
 
-          {type === 'nvr' && (
-            <button
-              type="button"
-              className="btn-pill"
-              onClick={handleAutoPollChannels}
-              disabled={isPolling}
-              title="Автоматически обнаружить все камеры и имена каналов на NVR через ISAPI"
-            >
-              {isPolling ? <RefreshCw size={13} className="animate-spin" /> : <RefreshCw size={13} color="#10B981" />}
-              {isPolling ? 'Опрос каналов NVR...' : 'Автоопрос каналов (ISAPI)'}
-            </button>
-          )}
+          <button
+            type="button"
+            className="btn-pill"
+            onClick={handleAutoPollChannels}
+            disabled={isPolling}
+            title={protocol === 'onvif' ? 'Получить список профилей потоков через ONVIF GetProfiles' : 'Автоматически обнаружить все каналы NVR через ISAPI'}
+          >
+            {isPolling ? <RefreshCw size={13} className="animate-spin" /> : <RefreshCw size={13} color="#10B981" />}
+            {isPolling
+              ? 'Опрос профилей...'
+              : protocol === 'onvif'
+              ? 'Автоопрос профилей ONVIF (GetProfiles)'
+              : 'Автоопрос каналов (ISAPI)'}
+          </button>
         </div>
 
         {testResult && (
@@ -508,15 +589,15 @@ export const AddDeviceModal: React.FC<Props> = ({ isOpen, onClose, onSaveDevice 
           </div>
         )}
 
-        {/* NVR Channels Configuration Section */}
-        {type === 'nvr' && (
-          <div style={{ background: 'var(--surface-card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '14px 16px', marginBottom: '16px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' }}>
-              <div style={{ fontWeight: 800, fontSize: '13px', color: '#FFFFFF' }}>
-                Каналы NVR-видеорегистратора (выберите количество и включите нужные):
-              </div>
+        {/* Channels Configuration Section */}
+        <div style={{ background: 'var(--surface-card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '14px 16px', marginBottom: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' }}>
+            <div style={{ fontWeight: 800, fontSize: '13px', color: '#FFFFFF' }}>
+              {type === 'nvr' ? 'Каналы NVR-видеорегистратора (выберите количество и включите нужные):' : 'Потоки и каналы устройства:'}
+            </div>
 
-              {/* Channel count buttons */}
+            {/* Channel count buttons for NVR */}
+            {type === 'nvr' && (
               <div className="tabs-container">
                 {[4, 8, 16, 32].map((cnt) => (
                   <button
@@ -529,68 +610,55 @@ export const AddDeviceModal: React.FC<Props> = ({ isOpen, onClose, onSaveDevice 
                   </button>
                 ))}
               </div>
-            </div>
+            )}
+          </div>
 
-            {/* Channels interactive list */}
-            <div style={{ maxHeight: '180px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              {channels.map((ch, idx) => (
-                <div
-                  key={ch.id}
+          {/* Channels interactive list */}
+          <div style={{ maxHeight: '180px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {channels.map((ch, idx) => (
+              <div
+                key={ch.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  padding: '6px 10px',
+                  borderRadius: '8px',
+                  background: ch.enabled ? 'rgba(255, 255, 255, 0.04)' : 'rgba(255, 255, 255, 0.01)',
+                  border: '1px solid var(--border)',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={ch.enabled}
+                  onChange={() => handleChannelToggle(idx)}
+                  style={{ accentColor: 'var(--emerald)', cursor: 'pointer' }}
+                />
+
+                <span className="mono" style={{ fontSize: '11px', color: 'var(--emerald)', width: '60px' }}>
+                  #{ch.channelNumber}
+                </span>
+
+                <input
+                  type="text"
+                  value={ch.name}
+                  onChange={(e) => handleChannelNameChange(idx, e.target.value)}
                   style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '10px',
-                    padding: '6px 10px',
-                    borderRadius: '8px',
-                    background: ch.enabled ? 'rgba(255, 255, 255, 0.04)' : 'rgba(255, 255, 255, 0.01)',
-                    border: '1px solid var(--border)',
+                    flex: 1,
+                    background: 'transparent',
+                    border: 'none',
+                    borderBottom: '1px dashed var(--border)',
+                    color: '#FFFFFF',
+                    fontSize: '12px',
+                    padding: '2px 4px',
                   }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={ch.enabled}
-                    onChange={() => handleChannelToggle(idx)}
-                    style={{ cursor: 'pointer', accentColor: 'var(--emerald)', width: '16px', height: '16px' }}
-                  />
+                />
 
-                  <span className="mono" style={{ fontSize: '11px', color: 'var(--emerald)', fontWeight: 700, width: '45px' }}>
-                    CH-{ch.channelNumber}
-                  </span>
-
-                  <input
-                    type="text"
-                    value={ch.name}
-                    onChange={(e) => handleChannelNameChange(idx, e.target.value)}
-                    placeholder={`Канал ${ch.channelNumber}`}
-                    style={{
-                      flex: 1,
-                      padding: '4px 8px',
-                      borderRadius: '6px',
-                      background: 'rgba(0, 0, 0, 0.4)',
-                      border: '1px solid var(--border)',
-                      color: '#FFFFFF',
-                      fontSize: '11.5px',
-                    }}
-                  />
-
-                  <span className="mono" style={{ fontSize: '10px', color: 'var(--muted)' }}>
-                    Streaming/Channels/{ch.channelNumber}01
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* RTSP Stream Generation preview */}
-        <div style={{ background: 'var(--surface-card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '10px 14px', marginBottom: '18px' }}>
-          <div style={{ fontSize: '11px', color: 'var(--muted)', fontWeight: 600, marginBottom: '2px' }}>
-            Автоматически генерируемый основной поток RTSP (Main Stream):
-          </div>
-          <div className="mono" style={{ fontSize: '11.5px', color: 'var(--emerald)', wordBreak: 'break-all' }}>
-            {type === 'camera'
-              ? `rtsp://${login}:${password}@${ip}:${rtspPort}/Streaming/Channels/101`
-              : `rtsp://${login}:${password}@${ip}:${rtspPort}/Streaming/Channels/\${N}01 (Каналы 1..${channels.length})`}
+                <span className="mono" style={{ fontSize: '10.5px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>
+                  {protocol.toUpperCase()} · Main/Sub
+                </span>
+              </div>
+            ))}
           </div>
         </div>
 
@@ -600,8 +668,8 @@ export const AddDeviceModal: React.FC<Props> = ({ isOpen, onClose, onSaveDevice 
             Отмена
           </button>
           <button className="btn-pill btn-pill-primary" onClick={handleSave}>
-            <Plus size={14} />
-            Сохранить устройство
+            <Check size={14} />
+            {type === 'nvr' ? 'Добавить NVR в комплекс' : 'Добавить IP-камеру'}
           </button>
         </div>
       </div>

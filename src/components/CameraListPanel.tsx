@@ -341,9 +341,24 @@ export const CameraListPanel: React.FC<Props> = ({
                       color: 'var(--muted)',
                     }}
                   >
-                    <span>
-                      {device.ip}:{device.httpPort}
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span>
+                        {device.ip}:{device.httpPort}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: '9.5px',
+                          fontWeight: 800,
+                          padding: '1px 5px',
+                          borderRadius: '4px',
+                          background: device.protocol === 'onvif' ? 'rgba(168, 85, 247, 0.16)' : 'rgba(255, 255, 255, 0.06)',
+                          color: device.protocol === 'onvif' ? '#C084FC' : 'var(--muted)',
+                          border: device.protocol === 'onvif' ? '1px solid rgba(168, 85, 247, 0.35)' : '1px solid var(--border)',
+                        }}
+                      >
+                        {device.protocol.toUpperCase()}
+                      </span>
+                    </div>
                     <span style={{ color: device.status === 'online' ? 'var(--emerald)' : 'var(--muted-dark)' }}>
                       {device.status === 'online' ? `${device.pingMs} мс` : 'Офлайн'}
                     </span>
