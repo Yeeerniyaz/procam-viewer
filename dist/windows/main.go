@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/md5"
@@ -559,26 +560,249 @@ func pingHost(ip string) (float64, []int) {
 	return 0.0, nil
 }
 
-// findFFmpegPath locates ffmpeg in system PATH or next to the executable (portable mode)
-func findFFmpegPath() (string, error) {
-	if exe, err := os.Executable(); err == nil {
-		dir := filepath.Dir(exe)
-		local := filepath.Join(dir, "ffmpeg")
-		if runtime.GOOS == "windows" {
-			local = filepath.Join(dir, "ffmpeg.exe")
+var (
+	ffmpegInstallMu     sync.Mutex
+	isInstallingFFmpeg  bool
+	ffmpegInstallStatus = "idle" // "idle", "downloading", "installed", "failed"
+	ffmpegInstallMsg    = ""
+	ffmpegProgress      = 0
+)
+
+func getAppBinDir() string {
+	if runtime.GOOS == "windows" {
+		if appData := os.Getenv("APPDATA"); appData != "" {
+			d := filepath.Join(appData, "procam-viewer", "bin")
+			_ = os.MkdirAll(d, 0755)
+			return d
 		}
-		if _, err := os.Stat(local); err == nil {
-			return local, nil
-		}
-		localBin := filepath.Join(dir, "bin", "ffmpeg")
-		if runtime.GOOS == "windows" {
-			localBin = filepath.Join(dir, "bin", "ffmpeg.exe")
-		}
-		if _, err := os.Stat(localBin); err == nil {
-			return localBin, nil
+	} else {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			d := filepath.Join(home, ".local", "share", "procam-viewer", "bin")
+			_ = os.MkdirAll(d, 0755)
+			return d
 		}
 	}
-	return exec.LookPath("ffmpeg")
+	if exe, err := os.Executable(); err == nil {
+		d := filepath.Join(filepath.Dir(exe), "bin")
+		_ = os.MkdirAll(d, 0755)
+		return d
+	}
+	return "bin"
+}
+
+// findFFmpegPath locates ffmpeg in system PATH, next to executable, or in user app bin dir
+func findFFmpegPath() (string, error) {
+	// 1. System PATH
+	if p, err := exec.LookPath("ffmpeg"); err == nil {
+		return p, nil
+	}
+
+	// 2. Next to executable
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		binName := "ffmpeg"
+		if runtime.GOOS == "windows" {
+			binName = "ffmpeg.exe"
+		}
+		candidate := filepath.Join(dir, binName)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+		candidateBin := filepath.Join(dir, "bin", binName)
+		if _, err := os.Stat(candidateBin); err == nil {
+			return candidateBin, nil
+		}
+	}
+
+	// 3. User app bin dir (~/.local/share/procam-viewer/bin/ffmpeg or %APPDATA%\procam-viewer\bin\ffmpeg.exe)
+	userBin := filepath.Join(getAppBinDir(), "ffmpeg")
+	if runtime.GOOS == "windows" {
+		userBin = filepath.Join(getAppBinDir(), "ffmpeg.exe")
+	}
+	if _, err := os.Stat(userBin); err == nil {
+		return userBin, nil
+	}
+
+	return "", fmt.Errorf("ffmpeg не найден")
+}
+
+// autoInstallFFmpeg downloads and extracts portable standalone FFmpeg automatically
+func autoInstallFFmpeg() error {
+	ffmpegInstallMu.Lock()
+	if isInstallingFFmpeg {
+		ffmpegInstallMu.Unlock()
+		return nil
+	}
+	isInstallingFFmpeg = true
+	ffmpegInstallStatus = "downloading"
+	ffmpegInstallMsg = "Загрузка портативного видеоядра FFmpeg..."
+	ffmpegProgress = 10
+	ffmpegInstallMu.Unlock()
+
+	defer func() {
+		ffmpegInstallMu.Lock()
+		isInstallingFFmpeg = false
+		ffmpegInstallMu.Unlock()
+	}()
+
+	binDir := getAppBinDir()
+	_ = os.MkdirAll(binDir, 0755)
+
+	targetBin := filepath.Join(binDir, "ffmpeg")
+	if runtime.GOOS == "windows" {
+		targetBin = filepath.Join(binDir, "ffmpeg.exe")
+	}
+
+	fmt.Printf("[FFmpeg] Начинаю автоматическую установку портативного ядра в %s...\n", targetBin)
+
+	if runtime.GOOS == "windows" {
+		url := "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+		tempZip := filepath.Join(os.TempDir(), fmt.Sprintf("ffmpeg_win64_%d.zip", time.Now().Unix()))
+		defer os.Remove(tempZip)
+
+		client := &http.Client{Timeout: 10 * time.Minute}
+		resp, err := client.Get(url)
+		if err != nil {
+			ffmpegInstallMu.Lock()
+			ffmpegInstallStatus = "failed"
+			ffmpegInstallMsg = fmt.Sprintf("Ошибка скачивания: %v", err)
+			ffmpegInstallMu.Unlock()
+			return err
+		}
+		defer resp.Body.Close()
+
+		outZip, err := os.Create(tempZip)
+		if err != nil {
+			ffmpegInstallMu.Lock()
+			ffmpegInstallStatus = "failed"
+			ffmpegInstallMsg = fmt.Sprintf("Ошибка создания temp zip: %v", err)
+			ffmpegInstallMu.Unlock()
+			return err
+		}
+		_, err = io.Copy(outZip, resp.Body)
+		_ = outZip.Close()
+		if err != nil {
+			ffmpegInstallMu.Lock()
+			ffmpegInstallStatus = "failed"
+			ffmpegInstallMsg = fmt.Sprintf("Ошибка сохранения: %v", err)
+			ffmpegInstallMu.Unlock()
+			return err
+		}
+
+		zr, err := zip.OpenReader(tempZip)
+		if err != nil {
+			ffmpegInstallMu.Lock()
+			ffmpegInstallStatus = "failed"
+			ffmpegInstallMsg = fmt.Sprintf("Ошибка открытия zip: %v", err)
+			ffmpegInstallMu.Unlock()
+			return err
+		}
+		defer zr.Close()
+
+		found := false
+		for _, f := range zr.File {
+			lower := strings.ToLower(f.Name)
+			if strings.HasSuffix(lower, "/bin/ffmpeg.exe") || strings.HasSuffix(lower, "ffmpeg.exe") {
+				rc, err := f.Open()
+				if err != nil {
+					continue
+				}
+				dest, err := os.OpenFile(targetBin, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0755)
+				if err != nil {
+					_ = rc.Close()
+					continue
+				}
+				_, _ = io.Copy(dest, rc)
+				_ = dest.Close()
+				_ = rc.Close()
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			ffmpegInstallMu.Lock()
+			ffmpegInstallStatus = "failed"
+			ffmpegInstallMsg = "Не найден ffmpeg.exe внутри архива"
+			ffmpegInstallMu.Unlock()
+			return fmt.Errorf("ffmpeg.exe not found in zip")
+		}
+
+	} else {
+		// Linux: Check if apt-get is available and root
+		if os.Geteuid() == 0 {
+			if _, err := exec.LookPath("apt-get"); err == nil {
+				_ = exec.Command("apt-get", "update").Run()
+				if err := exec.Command("apt-get", "install", "-y", "ffmpeg").Run(); err == nil {
+					if _, err := exec.LookPath("ffmpeg"); err == nil {
+						ffmpegInstallMu.Lock()
+						ffmpegInstallStatus = "installed"
+						ffmpegInstallMsg = "FFmpeg успешно установлен через системный пакетный менеджер"
+						ffmpegProgress = 100
+						ffmpegInstallMu.Unlock()
+						return nil
+					}
+				}
+			}
+		}
+
+		// Download static Linux x64
+		url := "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
+		tempTar := filepath.Join(os.TempDir(), fmt.Sprintf("ffmpeg_linux_%d.tar.xz", time.Now().Unix()))
+		defer os.Remove(tempTar)
+
+		client := &http.Client{Timeout: 10 * time.Minute}
+		resp, err := client.Get(url)
+		if err != nil {
+			ffmpegInstallMu.Lock()
+			ffmpegInstallStatus = "failed"
+			ffmpegInstallMsg = fmt.Sprintf("Ошибка скачивания: %v", err)
+			ffmpegInstallMu.Unlock()
+			return err
+		}
+		defer resp.Body.Close()
+
+		outTar, err := os.Create(tempTar)
+		if err != nil {
+			ffmpegInstallMu.Lock()
+			ffmpegInstallStatus = "failed"
+			ffmpegInstallMsg = fmt.Sprintf("Ошибка создания temp: %v", err)
+			ffmpegInstallMu.Unlock()
+			return err
+		}
+		_, err = io.Copy(outTar, resp.Body)
+		_ = outTar.Close()
+		if err != nil {
+			ffmpegInstallMu.Lock()
+			ffmpegInstallStatus = "failed"
+			ffmpegInstallMsg = fmt.Sprintf("Ошибка сохранения: %v", err)
+			ffmpegInstallMu.Unlock()
+			return err
+		}
+
+		tarCmd := exec.Command("tar", "-xf", tempTar, "--wildcards", "*/ffmpeg", "--strip-components=1", "-C", binDir)
+		if err := tarCmd.Run(); err != nil {
+			_ = exec.Command("tar", "-xf", tempTar, "-C", binDir).Run()
+		}
+		_ = os.Chmod(targetBin, 0755)
+	}
+
+	if _, err := os.Stat(targetBin); err == nil {
+		_ = os.Chmod(targetBin, 0755)
+		ffmpegInstallMu.Lock()
+		ffmpegInstallStatus = "installed"
+		ffmpegInstallMsg = fmt.Sprintf("Портативный FFmpeg готов: %s", targetBin)
+		ffmpegProgress = 100
+		ffmpegInstallMu.Unlock()
+		fmt.Printf("[FFmpeg] ✔ Успешно установлен: %s\n", targetBin)
+		return nil
+	}
+
+	ffmpegInstallMu.Lock()
+	ffmpegInstallStatus = "failed"
+	ffmpegInstallMsg = "Не удалось извлечь бинарник ffmpeg"
+	ffmpegInstallMu.Unlock()
+	return fmt.Errorf("failed to extract ffmpeg")
 }
 
 // streamRTSPMJPEG streams live video from an RTSP stream directly to browser using FFmpeg MJPEG pipe
@@ -590,7 +814,8 @@ func streamRTSPMJPEG(w http.ResponseWriter, r *http.Request, rtspURL string) {
 	}
 	ffmpegPath, err := findFFmpegPath()
 	if err != nil {
-		http.Error(w, "FFmpeg не найден на сервере", 501)
+		go autoInstallFFmpeg()
+		http.Error(w, "FFmpeg не найден. Запущена автоматическая фоновая загрузка портативного видеоядра, повторите попытку через минуту", 503)
 		return
 	}
 
@@ -2223,6 +2448,40 @@ func main() {
 		})
 	}))
 
+	// 16. API: System FFmpeg Auto-Install & Status
+	http.HandleFunc("/api/system/ffmpeg-status", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		ffmpegInstallMu.Lock()
+		status := ffmpegInstallStatus
+		msg := ffmpegInstallMsg
+		prog := ffmpegProgress
+		isInst := isInstallingFFmpeg
+		ffmpegInstallMu.Unlock()
+
+		p, err := findFFmpegPath()
+		installed := err == nil && p != ""
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"installed":  installed,
+			"path":       p,
+			"status":     status,
+			"installing": isInst,
+			"progress":   prog,
+			"message":    msg,
+		})
+	}))
+
+	http.HandleFunc("/api/system/ffmpeg-install", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		go func() {
+			_ = autoInstallFFmpeg()
+		}()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": "Установка портативного видеоядра FFmpeg запущена в фоновом режиме",
+		})
+	}))
+
 	// 9. Downloads: EXE for Windows, Linux binary and Manual PDF
 	http.HandleFunc("/download/windows", func(w http.ResponseWriter, r *http.Request) {
 		p := findViewerFile("ProCamViewer_Windows_x64.exe")
@@ -2310,6 +2569,14 @@ func main() {
 	fmt.Println("================================================================")
 	fmt.Printf("  %s v%s (Engineering CCTV Suite — Windows & Linux)\n", AppName, Version)
 	fmt.Printf("  Графический интерфейс: %s\n", localURL)
+	if p, err := findFFmpegPath(); err == nil {
+		fmt.Printf("  Видеоядро FFmpeg: %s (Готов)\n", p)
+	} else {
+		fmt.Println("  Видеоядро FFmpeg: отсутствует. Запуск автоматической загрузки...")
+		go func() {
+			_ = autoInstallFFmpeg()
+		}()
+	}
 	fmt.Println("================================================================")
 
 	if !headless {

@@ -33,6 +33,41 @@ export const VmsTopBar: React.FC<Props> = ({
   const [cpuUsage, setCpuUsage] = useState<number>(14);
   const [ramUsage, setRamUsage] = useState<string>('2.4');
 
+  // FFmpeg auto-install telemetry
+  const [ffmpegStatus, setFfmpegStatus] = useState<{
+    installed: boolean;
+    installing: boolean;
+    message?: string;
+  }>({ installed: true, installing: false });
+
+  useEffect(() => {
+    const checkFfmpeg = () => {
+      fetch('/api/system/ffmpeg-status')
+        .then((r) => r.json())
+        .then((d) => {
+          if (d) {
+            setFfmpegStatus({
+              installed: d.installed,
+              installing: d.installing,
+              message: d.message,
+            });
+          }
+        })
+        .catch(() => {});
+    };
+    checkFfmpeg();
+    const interval = setInterval(checkFfmpeg, 8000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleInstallFfmpeg = () => {
+    fetch('/api/system/ffmpeg-install', { method: 'POST' })
+      .then(() => {
+        setFfmpegStatus((prev) => ({ ...prev, installing: true }));
+      })
+      .catch(() => {});
+  };
+
   // Digital Live Clock
   useEffect(() => {
     const updateTime = () => {
@@ -279,6 +314,45 @@ export const VmsTopBar: React.FC<Props> = ({
           <Globe size={11} color={isOnline ? 'var(--emerald)' : '#EF4444'} />
           <span>{isOnline ? primaryIP : 'Офлайн'}</span>
         </div>
+
+        {/* FFmpeg Auto-Install Indicator if installing or missing */}
+        {ffmpegStatus.installing ? (
+          <div
+            className="mono"
+            style={{
+              fontSize: '10.5px',
+              color: '#F59E0B',
+              background: 'rgba(245, 158, 11, 0.15)',
+              border: '1px solid rgba(245, 158, 11, 0.35)',
+              padding: '3px 8px',
+              borderRadius: '6px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '5px',
+            }}
+            title={ffmpegStatus.message || 'Загрузка портативного видеоядра FFmpeg в фоновом режиме...'}
+          >
+            <span className="status-dot live-pulse" style={{ background: '#F59E0B' }} />
+            <span>FFmpeg: Загрузка...</span>
+          </div>
+        ) : !ffmpegStatus.installed ? (
+          <button
+            type="button"
+            onClick={handleInstallFfmpeg}
+            className="btn-pill"
+            style={{
+              fontSize: '10.5px',
+              color: '#EF4444',
+              background: 'rgba(239, 68, 68, 0.15)',
+              border: '1px solid rgba(239, 68, 68, 0.4)',
+              padding: '3px 8px',
+              cursor: 'pointer',
+            }}
+            title="Нажмите для автоматической установки портативного видеоядра FFmpeg"
+          >
+            ⚡ Установить FFmpeg
+          </button>
+        ) : null}
 
         {/* CPU & RAM Telemetry Badge */}
         <div
