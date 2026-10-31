@@ -71,13 +71,23 @@ export const ManualModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
           <div style={{ background: 'var(--surface-card)', padding: '14px 16px', borderRadius: '14px', border: '1px solid var(--border)' }}>
             <h4 style={{ color: '#FFFFFF', fontSize: '14px', fontWeight: 700, marginBottom: '6px' }}>
-              5. Поставка оборудования и монтаж видеонаблюдения — ProCam Алматы
+              5. Поставка оборудования, монтаж и разработка — ProCam Алматы
             </h4>
-            <p>
+            <p style={{ marginBottom: '8px' }}>
               Официальное оборудование Hikvision, HiWatch, Dahua, Uniview. Инженерный расчет кабельных трасс, PoE-бюджета и емкости дисков:
               <br />
               <b style={{ color: 'var(--emerald)' }}>Телефон / WhatsApp:</b> +7 (706) 606-63-23 · +7 (776) 606-63-23
+              <br />
+              <b style={{ color: '#60A5FA' }}>Электронная почта:</b> yeeerniyaz@gmail.com
+              <br />
+              <b style={{ color: '#F59E0B' }}>Сайт разработчика:</b>{' '}
+              <a href="https://yeee.kz" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--emerald)', textDecoration: 'underline' }}>
+                yeee.kz
+              </a>
             </p>
+            <div style={{ fontSize: '12px', color: '#71717A', borderTop: '1px solid rgba(255, 255, 255, 0.06)', paddingTop: '6px', marginTop: '6px' }}>
+              Автор и инженер: Ернияз Талғатулы · Проекты: ProCam CCTV, ProCam Radar, ProCam Viewer, Royal Banners (royalbanners.yeee.kz), TezTap, Justice Company.
+            </div>
           </div>
         </div>
 

@@ -71,20 +71,15 @@ textarea,
   -webkit-user-select: text;
 }
 
-/* Scrollbars */
+/* Scrollbars (Radar-style: zero scrollbars across whole app) */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
 }
-::-webkit-scrollbar-track {
-  background: rgba(11, 13, 18, 0.6);
-}
-::-webkit-scrollbar-thumb {
-  background: #272f42;
-  border-radius: 999px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: var(--emerald);
+* {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
 }
 
 /* Monospace Utilities */

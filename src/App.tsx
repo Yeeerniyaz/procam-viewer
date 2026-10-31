@@ -8,6 +8,7 @@ import { EventCenterModule } from './components/EventCenterModule';
 import { AddDeviceModal } from './components/AddDeviceModal';
 import { ExportConfigModal } from './components/ExportConfigModal';
 import { ManualModal } from './components/ManualModal';
+import { AuthorProjectsModal } from './components/AuthorProjectsModal';
 import {
   VmsModule,
   DeviceItem,
@@ -141,6 +142,7 @@ export const App: React.FC = () => {
   const [editingDevice, setEditingDevice] = useState<DeviceItem | null>(null);
   const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
   const [isManualModalOpen, setIsManualModalOpen] = useState<boolean>(false);
+  const [isAuthorModalOpen, setIsAuthorModalOpen] = useState<boolean>(false);
 
   // Real-time Event Terminal Logs
   const [logs, setLogs] = useState<LogEntry[]>([
@@ -1099,6 +1101,98 @@ export const App: React.FC = () => {
           )}
         </div>
 
+        {/* Sleek VMS Bottom Status & Author Bar */}
+        <footer
+          style={{
+            height: '26px',
+            background: 'linear-gradient(180deg, #0c0f16 0%, #080a0f 100%)',
+            borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '0 12px',
+            fontSize: '11px',
+            color: '#71717A',
+            userSelect: 'none',
+            flexShrink: 0,
+            zIndex: 40,
+          }}
+        >
+          {/* Left: Engine & channels */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--emerald)' }} />
+              <span style={{ color: '#D4D4D8', fontWeight: 600 }}>ProCam VMS Core</span>
+            </span>
+            <span style={{ color: 'rgba(255, 255, 255, 0.15)' }}>|</span>
+            <span>Каналов: {devices.reduce((acc, d) => acc + (d.channels?.length || 1), 0)}</span>
+          </div>
+
+          {/* Center: Author, contacts & website */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'nowrap' }}>
+            <span>
+              Автор и инженер:{' '}
+              <a
+                href="https://yeee.kz"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: '#E4E4E7', fontWeight: 700, textDecoration: 'none' }}
+              >
+                Ернияз
+              </a>{' '}
+              (
+              <a
+                href="https://yeee.kz"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: 'var(--emerald)', textDecoration: 'none', fontWeight: 600 }}
+              >
+                yeee.kz
+              </a>
+              )
+            </span>
+            <span style={{ color: 'rgba(255, 255, 255, 0.15)' }}>·</span>
+            <a
+              href="mailto:yeeerniyaz@gmail.com"
+              style={{ color: '#A1A1AA', textDecoration: 'none', fontFamily: 'monospace' }}
+            >
+              yeeerniyaz@gmail.com
+            </a>
+            <span style={{ color: 'rgba(255, 255, 255, 0.15)' }}>·</span>
+            <span style={{ fontFamily: 'monospace', color: '#A1A1AA' }}>
+              <a href="tel:+77066066323" style={{ color: 'inherit', textDecoration: 'none' }}>+7 706 606 63 23</a>
+              {' · '}
+              <a href="tel:+77766066323" style={{ color: 'inherit', textDecoration: 'none' }}>+7 776 606 63 23</a>
+            </span>
+          </div>
+
+          {/* Right: Button to open full author & all projects modal */}
+          <div>
+            <button
+              type="button"
+              onClick={() => setIsAuthorModalOpen(true)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--emerald)',
+                fontSize: '11px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                padding: '2px 6px',
+                borderRadius: '4px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                textDecoration: 'underline',
+              }}
+              title="Открыть информацию об авторе, контакты и проекты экосистемы"
+            >
+              <span>Обо мне & проекты</span>
+              <span style={{ fontSize: '10px' }}>↗</span>
+            </button>
+          </div>
+        </footer>
+
         {/* Global Modals */}
         <AddDeviceModal
           isOpen={isAddModalOpen}
@@ -1123,6 +1217,11 @@ export const App: React.FC = () => {
         <ManualModal
           isOpen={isManualModalOpen}
           onClose={() => setIsManualModalOpen(false)}
+        />
+
+        <AuthorProjectsModal
+          isOpen={isAuthorModalOpen}
+          onClose={() => setIsAuthorModalOpen(false)}
         />
       </div>
     </MantineProvider>
