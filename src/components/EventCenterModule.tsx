@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ActiveGridCell, DeviceItem, LogEntry } from '../types';
+import { ActiveGridCell, DeviceItem, LogEntry, getCellDisplayName } from '../types';
 import {
   Activity,
   Terminal,
@@ -145,7 +145,7 @@ export const EventCenterModule: React.FC<Props> = ({
             {/* Header info */}
             <div>
               <div style={{ fontSize: '15px', fontWeight: 800, color: '#FFFFFF' }}>
-                {selectedCell.deviceName} — {selectedCell.channelName}
+                {getCellDisplayName(selectedCell)}
               </div>
               <div style={{ fontSize: '11.5px', color: 'var(--muted)', marginTop: '2px' }}>
                 Канал №{selectedCell.channelNumber} · Протокол: {selectedCell.deviceProtocol.toUpperCase()} (Digest Authentication)

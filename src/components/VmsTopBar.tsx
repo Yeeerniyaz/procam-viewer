@@ -9,8 +9,8 @@ import {
   Maximize,
   HelpCircle,
   Cpu,
-  Wifi,
   HardDrive,
+  Globe,
 } from 'lucide-react';
 
 interface Props {
@@ -29,6 +29,7 @@ export const VmsTopBar: React.FC<Props> = ({
   onOpenManualModal,
 }) => {
   const [clock, setClock] = useState<string>('');
+  const [dateStr, setDateStr] = useState<string>('');
   const [cpuUsage, setCpuUsage] = useState<number>(14);
   const [ramUsage, setRamUsage] = useState<string>('2.4');
 
@@ -37,6 +38,12 @@ export const VmsTopBar: React.FC<Props> = ({
     const updateTime = () => {
       const now = new Date();
       setClock(now.toLocaleTimeString('ru-RU', { hour12: false }));
+      setDateStr(
+        now.toLocaleDateString('ru-RU', {
+          day: 'numeric',
+          month: 'short',
+        })
+      );
     };
     updateTime();
     const interval = setInterval(updateTime, 1000);
@@ -69,13 +76,17 @@ export const VmsTopBar: React.FC<Props> = ({
   };
 
   const activeIface = interfaces.find((i) => i.carrier && i.ip) || interfaces[0];
+  const isOnline =
+    (typeof navigator !== 'undefined' ? navigator.onLine : true) &&
+    (interfaces.length > 0 ? interfaces.some((i) => i.carrier) : true);
 
   return (
     <header
       style={{
-        height: '44px',
-        background: '#0d1017',
+        height: '46px',
+        background: 'linear-gradient(180deg, #11151f 0%, #0c0f16 100%)',
         borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+        boxShadow: '0 2px 12px rgba(0, 0, 0, 0.45)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
@@ -86,158 +97,210 @@ export const VmsTopBar: React.FC<Props> = ({
       }}
     >
       {/* Left: Brand + Module Navigation Tabs */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '14px', height: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', height: '100%' }}>
         {/* Brand */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingRight: '8px', borderRight: '1px solid rgba(255, 255, 255, 0.08)' }}>
-          <CyberOwlLogo size={24} />
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: '5px' }}>
-            <span style={{ fontWeight: 800, fontSize: '13px', letterSpacing: '0.4px', color: '#FFFFFF' }}>
-              PROCAM <span style={{ color: 'var(--emerald)' }}>VMS</span>
-            </span>
-            <span style={{ fontSize: '9.5px', color: 'var(--muted)', fontWeight: 600 }}>
-              iVMS-4200
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '9px',
+            paddingRight: '12px',
+            borderRight: '1px solid rgba(255, 255, 255, 0.08)',
+          }}
+        >
+          <CyberOwlLogo size={26} />
+          <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.15 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontWeight: 900, fontSize: '13.5px', letterSpacing: '0.4px', color: '#FFFFFF' }}>
+                PRO<span style={{ color: 'var(--emerald)' }}>CAM</span>
+              </span>
+              <span
+                className="mono"
+                style={{
+                  fontSize: '9px',
+                  fontWeight: 800,
+                  padding: '1px 5px',
+                  borderRadius: '4px',
+                  background: 'rgba(16, 185, 129, 0.15)',
+                  color: 'var(--emerald)',
+                  border: '1px solid rgba(16, 185, 129, 0.35)',
+                  letterSpacing: '0.04em',
+                }}
+              >
+                VMS
+              </span>
+            </div>
+            <span style={{ fontSize: '9px', color: '#71717A', fontWeight: 600, letterSpacing: '0.02em' }}>
+              Video Management System
             </span>
           </div>
         </div>
 
         {/* 4 Main Module Tabs */}
-        <nav style={{ display: 'flex', alignItems: 'center', gap: '4px', height: '100%' }}>
+        <nav
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '3px',
+            background: 'rgba(255, 255, 255, 0.03)',
+            padding: '3px',
+            borderRadius: '9px',
+            border: '1px solid rgba(255, 255, 255, 0.06)',
+          }}
+        >
+          {/* Tab 1: Live View */}
           <button
             type="button"
             onClick={() => onSelectModule('live')}
             style={{
-              height: '32px',
+              height: '30px',
               padding: '0 12px',
               borderRadius: '7px',
               border: activeModule === 'live' ? '1px solid var(--emerald-border)' : '1px solid transparent',
-              background: activeModule === 'live' ? 'rgba(16, 185, 129, 0.14)' : 'transparent',
-              color: activeModule === 'live' ? '#FFFFFF' : 'var(--muted)',
+              background: activeModule === 'live' ? 'rgba(16, 185, 129, 0.16)' : 'transparent',
+              color: activeModule === 'live' ? '#FFFFFF' : '#9CA3AF',
+              boxShadow: activeModule === 'live' ? '0 1px 8px rgba(16, 185, 129, 0.2)' : 'none',
               fontSize: '12px',
-              fontWeight: 700,
+              fontWeight: activeModule === 'live' ? 700 : 600,
               cursor: 'pointer',
               display: 'inline-flex',
               alignItems: 'center',
               gap: '7px',
               transition: 'all 0.15s ease',
             }}
+            title="Основной ракурс видеонаблюдения в реальном времени (Live View)"
           >
             <Monitor size={14} color={activeModule === 'live' ? 'var(--emerald)' : 'currentColor'} />
-            Основной ракурс (Live View)
+            Мониторинг
           </button>
 
+          {/* Tab 2: Playback */}
           <button
             type="button"
             onClick={() => onSelectModule('playback')}
             style={{
-              height: '32px',
+              height: '30px',
               padding: '0 12px',
               borderRadius: '7px',
               border: activeModule === 'playback' ? '1px solid var(--emerald-border)' : '1px solid transparent',
-              background: activeModule === 'playback' ? 'rgba(16, 185, 129, 0.14)' : 'transparent',
-              color: activeModule === 'playback' ? '#FFFFFF' : 'var(--muted)',
+              background: activeModule === 'playback' ? 'rgba(16, 185, 129, 0.16)' : 'transparent',
+              color: activeModule === 'playback' ? '#FFFFFF' : '#9CA3AF',
+              boxShadow: activeModule === 'playback' ? '0 1px 8px rgba(16, 185, 129, 0.2)' : 'none',
               fontSize: '12px',
-              fontWeight: 700,
+              fontWeight: activeModule === 'playback' ? 700 : 600,
               cursor: 'pointer',
               display: 'inline-flex',
               alignItems: 'center',
               gap: '7px',
               transition: 'all 0.15s ease',
             }}
+            title="Воспроизведение локальных и NVR-записей архива (Remote Playback)"
           >
             <Film size={14} color={activeModule === 'playback' ? 'var(--emerald)' : 'currentColor'} />
-            Удаленное воспроизведение (Playback)
+            Архив
           </button>
 
+          {/* Tab 3: Devices */}
           <button
             type="button"
             onClick={() => onSelectModule('devices')}
             style={{
-              height: '32px',
+              height: '30px',
               padding: '0 12px',
               borderRadius: '7px',
               border: activeModule === 'devices' ? '1px solid var(--emerald-border)' : '1px solid transparent',
-              background: activeModule === 'devices' ? 'rgba(16, 185, 129, 0.14)' : 'transparent',
-              color: activeModule === 'devices' ? '#FFFFFF' : 'var(--muted)',
+              background: activeModule === 'devices' ? 'rgba(16, 185, 129, 0.16)' : 'transparent',
+              color: activeModule === 'devices' ? '#FFFFFF' : '#9CA3AF',
+              boxShadow: activeModule === 'devices' ? '0 1px 8px rgba(16, 185, 129, 0.2)' : 'none',
               fontSize: '12px',
-              fontWeight: 700,
+              fontWeight: activeModule === 'devices' ? 700 : 600,
               cursor: 'pointer',
               display: 'inline-flex',
               alignItems: 'center',
               gap: '7px',
               transition: 'all 0.15s ease',
             }}
+            title="Управление камерами, NVR и сканирование сети (Device Management)"
           >
             <Server size={14} color={activeModule === 'devices' ? 'var(--emerald)' : 'currentColor'} />
-            Управление устройствами (Device Management)
+            Устройства
           </button>
 
+          {/* Tab 4: Events & Logs */}
           <button
             type="button"
             onClick={() => onSelectModule('events')}
             style={{
-              height: '32px',
+              height: '30px',
               padding: '0 12px',
               borderRadius: '7px',
               border: activeModule === 'events' ? '1px solid var(--emerald-border)' : '1px solid transparent',
-              background: activeModule === 'events' ? 'rgba(16, 185, 129, 0.14)' : 'transparent',
-              color: activeModule === 'events' ? '#FFFFFF' : 'var(--muted)',
+              background: activeModule === 'events' ? 'rgba(16, 185, 129, 0.16)' : 'transparent',
+              color: activeModule === 'events' ? '#FFFFFF' : '#9CA3AF',
+              boxShadow: activeModule === 'events' ? '0 1px 8px rgba(16, 185, 129, 0.2)' : 'none',
               fontSize: '12px',
-              fontWeight: 700,
+              fontWeight: activeModule === 'events' ? 700 : 600,
               cursor: 'pointer',
               display: 'inline-flex',
               alignItems: 'center',
               gap: '7px',
               transition: 'all 0.15s ease',
             }}
+            title="Журнал событий, тревоги и инженерная диагностика потоков (Event Center & Logs)"
           >
             <Activity size={14} color={activeModule === 'events' ? 'var(--emerald)' : 'currentColor'} />
-            События и консоль (Event Center & Logs)
+            События
           </button>
         </nav>
       </div>
 
-      {/* Right: Telemetry + Network + Live Clock + Fullscreen */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+      {/* Right: Network + Telemetry + Live Clock + Actions */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
         {/* Host IP & Network Badge */}
         <div
           className="mono"
           style={{
-            fontSize: '10.5px',
-            color: 'var(--muted)',
+            fontSize: '11px',
+            color: isOnline ? '#D4D4D8' : '#EF4444',
             display: 'flex',
             alignItems: 'center',
             gap: '6px',
-            background: 'rgba(255, 255, 255, 0.04)',
-            padding: '4px 9px',
-            borderRadius: '6px',
-            border: '1px solid rgba(255, 255, 255, 0.06)',
+            background: 'rgba(255, 255, 255, 0.03)',
+            padding: '4px 10px',
+            borderRadius: '7px',
+            border: '1px solid rgba(255, 255, 255, 0.07)',
           }}
-          title={activeIface ? activeIface.label : primaryIP}
+          title={activeIface ? `${activeIface.label} · IP: ${primaryIP} (${activeIface.subnet || 'Авто'})` : primaryIP}
         >
-          <span className="status-dot online" style={{ width: '6px', height: '6px' }} />
-          <span>{primaryIP}</span>
+          <span
+            className={`status-dot ${isOnline ? 'online' : 'offline'}`}
+            style={{ width: '6px', height: '6px' }}
+          />
+          <Globe size={11} color={isOnline ? 'var(--emerald)' : '#EF4444'} />
+          <span>{isOnline ? primaryIP : 'Офлайн'}</span>
         </div>
 
         {/* CPU & RAM Telemetry Badge */}
         <div
           className="mono"
           style={{
-            fontSize: '10.5px',
+            fontSize: '11px',
             color: '#D4D4D8',
             display: 'flex',
             alignItems: 'center',
-            gap: '8px',
-            background: 'rgba(255, 255, 255, 0.04)',
-            padding: '4px 9px',
-            borderRadius: '6px',
-            border: '1px solid rgba(255, 255, 255, 0.06)',
+            gap: '7px',
+            background: 'rgba(255, 255, 255, 0.03)',
+            padding: '4px 10px',
+            borderRadius: '7px',
+            border: '1px solid rgba(255, 255, 255, 0.07)',
           }}
+          title="Загрузка ресурсов процессора и оперативной памяти"
         >
           <span style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
             <Cpu size={11} color="var(--emerald)" />
             {cpuUsage}%
           </span>
-          <span style={{ color: 'rgba(255, 255, 255, 0.2)' }}>|</span>
+          <span style={{ color: 'rgba(255, 255, 255, 0.15)' }}>|</span>
           <span style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
             <HardDrive size={11} color="#60A5FA" />
             {ramUsage} ГБ
@@ -248,34 +311,58 @@ export const VmsTopBar: React.FC<Props> = ({
         <div
           className="mono"
           style={{
-            fontSize: '12px',
+            fontSize: '11.5px',
             fontWeight: 800,
             color: '#FFFFFF',
-            background: 'rgba(16, 185, 129, 0.1)',
-            border: '1px solid var(--emerald-border)',
-            padding: '3px 9px',
-            borderRadius: '6px',
-            letterSpacing: '0.8px',
+            background: 'rgba(255, 255, 255, 0.05)',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            padding: '4px 10px',
+            borderRadius: '7px',
+            letterSpacing: '0.6px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
           }}
+          title="Системное время рабочей станции"
         >
-          {clock || '00:00:00'}
+          <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: 'var(--emerald)', boxShadow: '0 0 6px var(--emerald)' }} />
+          <span>{clock || '00:00:00'}</span>
+          {dateStr && (
+            <span style={{ color: 'var(--muted)', fontSize: '10px', fontWeight: 600 }}>
+              {dateStr}
+            </span>
+          )}
         </div>
+
+        <div style={{ width: '1px', height: '18px', background: 'rgba(255, 255, 255, 0.1)', margin: '0 2px' }} />
 
         {/* PDF Manual button */}
         <button
           type="button"
           onClick={onOpenManualModal}
           style={{
-            background: 'transparent',
-            border: 'none',
-            color: 'var(--muted)',
+            background: 'rgba(255, 255, 255, 0.03)',
+            border: '1px solid rgba(255, 255, 255, 0.07)',
+            color: '#A1A1AA',
             cursor: 'pointer',
-            padding: '6px',
+            padding: '6px 8px',
             display: 'flex',
             alignItems: 'center',
-            borderRadius: '6px',
+            justifyContent: 'center',
+            borderRadius: '7px',
+            transition: 'all 0.15s ease',
           }}
-          title="Инструкция оператора iVMS (PDF)"
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = '#FFFFFF';
+            e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.2)';
+            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = '#A1A1AA';
+            e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.07)';
+            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.03)';
+          }}
+          title="Руководство пользователя ProCam VMS"
         >
           <HelpCircle size={15} />
         </button>
@@ -285,16 +372,28 @@ export const VmsTopBar: React.FC<Props> = ({
           type="button"
           onClick={toggleFullscreen}
           style={{
-            background: 'transparent',
-            border: 'none',
-            color: 'var(--muted)',
+            background: 'rgba(255, 255, 255, 0.03)',
+            border: '1px solid rgba(255, 255, 255, 0.07)',
+            color: '#A1A1AA',
             cursor: 'pointer',
-            padding: '6px',
+            padding: '6px 8px',
             display: 'flex',
             alignItems: 'center',
-            borderRadius: '6px',
+            justifyContent: 'center',
+            borderRadius: '7px',
+            transition: 'all 0.15s ease',
           }}
-          title="Полноэкранный режим (F11)"
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = '#FFFFFF';
+            e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.2)';
+            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = '#A1A1AA';
+            e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.07)';
+            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.03)';
+          }}
+          title="Полноэкранный режим монитора (F11)"
         >
           <Maximize size={15} />
         </button>

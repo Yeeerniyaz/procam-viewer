@@ -95,6 +95,13 @@ export interface CustomView {
   }[];
 }
 
+export interface CameraFolder {
+  id: string;
+  name: string;
+  color?: string;
+  cameraKeys: string[]; // `${deviceId}_${channelId}`
+}
+
 export interface PlaybackSegment {
   startTime: string; // "08:00:00"
   endTime: string;   // "12:30:00"
@@ -135,3 +142,80 @@ export interface LogEntry {
 }
 
 export type FilterType = 'all' | 'camera' | 'nvr' | 'online' | 'offline';
+
+/**
+ * Cleans a device name by stripping generic ONVIF model fluff (e.g. "(CCTV)", "Network Camera")
+ * and adding a short IP hint if the remaining name is generic.
+ */
+export function cleanDeviceName(name?: string, ip?: string): string {
+  if (!name) return '';
+  let clean = name.trim();
+  clean = clean
+    .replace(/\s*\(\s*cctv\s*\)\s*/gi, ' ')
+    .replace(/\bnetwork camera\b/gi, '')
+    .replace(/\bip camera\b/gi, 'IP Camera')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const isGeneric = !clean || /^(ip\s*camera|camera|камера)$/i.test(clean);
+  if (isGeneric && ip) {
+    const parts = ip.split('.');
+    const suffix = parts.length === 4 ? `.${parts[3]}` : ip;
+    return `IP Camera (${suffix})`;
+  }
+  return clean || 'Камера';
+}
+
+/**
+ * Returns a human-friendly, clean, and unambiguous display name for a camera cell.
+ * Handles generic channel names ("Основной поток", "Канал 1"), standalone IP cameras,
+ * multi-channel NVRs, and custom-named channels.
+ */
+export function getCellDisplayName(cell: ActiveGridCell | null | undefined): string {
+  if (!cell) return '';
+  const devName = (cell.deviceName || '').trim();
+  const chName = (cell.channelName || '').trim();
+  const ip = cell.deviceIp || '';
+
+  const cleanDev = cleanDeviceName(devName, ip);
+
+  // Check if channelName is generic stream technical jargon ("Основной поток", "Канал 1: Основной поток", "substream")
+  const isGenericStreamOnly =
+    !chName ||
+    /^(канал\s*\d+:\s*)?(основной поток(\s*\(.*\))?|субпоток(\s*\(.*\))?|main\s*stream|sub\s*stream|stream\s*\d+|profile\s*\d+)$/i.test(chName);
+
+  // Check if channelName is just a numbered channel like "Канал 1"
+  const isNumberedChannelOnly = /^(канал|ch)\s*\d+$/i.test(chName);
+
+  // If channelName is pure stream jargon, prioritize clean device name
+  if (isGenericStreamOnly) {
+    if (cleanDev) return cleanDev;
+    return `Камера ${cell.channelNumber || 1}`;
+  }
+
+  // If channel is numbered ("Канал 1", "Канал 2"...)
+  if (isNumberedChannelOnly) {
+    if (cleanDev && !/^(канал|ch)\s*\d+$/i.test(cleanDev)) {
+      return `${cleanDev} · CH ${cell.channelNumber || 1}`;
+    }
+    return cleanDev || chName || `Камера ${cell.channelNumber || 1}`;
+  }
+
+  // If both device and channel have distinctive meaningful names
+  if (cleanDev && chName && cleanDev.toLowerCase() !== chName.toLowerCase()) {
+    if (chName.toLowerCase().startsWith(cleanDev.toLowerCase())) {
+      return chName;
+    }
+    const cleanCh = chName.replace(/^(канал|ch)\s*\d+:\s*/i, '').trim();
+    if (/^(основной поток|субпоток|main\s*stream|sub\s*stream)/i.test(cleanCh)) {
+      return cleanDev;
+    }
+    if (cleanCh && cleanCh.toLowerCase() !== cleanDev.toLowerCase()) {
+      return `${cleanDev} · ${cleanCh}`;
+    }
+    return cleanDev;
+  }
+
+  return cleanDev || chName || `Камера ${cell.channelNumber || 1}`;
+}
+

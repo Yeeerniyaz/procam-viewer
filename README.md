@@ -1,6 +1,6 @@
 <div align="center">
   <img src="assets/procam-viewer.png" width="110" height="110" alt="ProCam VMS Cyber-Owl Logo" />
-  <h1>ProCam VMS v4.2 — iVMS-4200 Engineering Surveillance Suite</h1>
+  <h1>ProCam VMS v4.2 — Professional Engineering Surveillance Suite</h1>
   <p><b>Профессиональная кроссплатформенная VMS-система видеонаблюдения для IP-камер и многоканальных NVR (Hikvision ISAPI, Dahua CGI, ONVIF Profile S/G/T) для Windows и Linux</b></p>
 
   <p>
@@ -18,7 +18,7 @@
 
 ---
 
-## 📸 Архитектура рабочих модулей в стиле iVMS-4200
+## 📸 Архитектура рабочих модулей ProCam VMS
 
 ProCam VMS спроектирован по модульному стандарту пультов централизованного наблюдения (VMS) с разделением на 4 ключевых рабочих пространства:
 

@@ -1,9 +1,11 @@
-import React, { useState, useRef } from 'react';
-import { ActiveGridCell } from '../types';
+import React, { useState, useRef, useEffect } from 'react';
+import { ActiveGridCell, getCellDisplayName } from '../types';
 import {
   Camera,
   Maximize2,
   Minimize2,
+  Expand,
+  Minimize,
   RefreshCw,
   Volume2,
   VolumeX,
@@ -13,6 +15,8 @@ import {
   X,
   ZoomIn,
   RotateCcw,
+  WifiOff,
+  Plus,
 } from 'lucide-react';
 
 interface Props {
@@ -53,6 +57,41 @@ export const VmsVideoCell: React.FC<Props> = ({
   const dragStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const [imgError, setImgError] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+  const cellRef = useRef<HTMLDivElement>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      setIsFullscreen(document.fullscreenElement === cellRef.current);
+    };
+    document.addEventListener('fullscreenchange', handleFsChange);
+    return () => document.removeEventListener('fullscreenchange', handleFsChange);
+  }, []);
+
+  const handleToggleFullscreen = (e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    if (document.fullscreenElement === cellRef.current) {
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      }
+    } else {
+      if (cellRef.current?.requestFullscreen) {
+        cellRef.current.requestFullscreen().catch(() => {});
+      }
+    }
+  };
+
+  const handleCellDoubleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isFullscreen) {
+      handleToggleFullscreen();
+    } else {
+      onDoubleClick();
+    }
+  };
 
   // Digital zoom on wheel
   const handleWheel = (e: React.WheelEvent) => {
@@ -132,7 +171,7 @@ export const VmsVideoCell: React.FC<Props> = ({
           height: '100%',
           background: isDragOver ? 'rgba(16, 185, 129, 0.08)' : '#07090e',
           border: isDragOver
-            ? '1px dashed var(--emerald)'
+            ? '1.5px dashed var(--emerald)'
             : isSelected
             ? '1px solid var(--emerald)'
             : '1px solid rgba(255, 255, 255, 0.05)',
@@ -141,16 +180,36 @@ export const VmsVideoCell: React.FC<Props> = ({
           alignItems: 'center',
           justifyContent: 'center',
           gap: '8px',
-          color: 'rgba(255, 255, 255, 0.25)',
+          color: 'rgba(255, 255, 255, 0.3)',
           cursor: 'pointer',
           position: 'relative',
           userSelect: 'none',
+          transition: 'all 0.15s ease',
         }}
       >
-        <span className="mono" style={{ fontSize: '11px', color: 'rgba(255, 255, 255, 0.3)' }}>
-          ЯЧЕЙКА #{cellIndex + 1}
-        </span>
-        <span style={{ fontSize: '11px' }}>Перетащите камеру из дерева или дважды кликните по ней</span>
+        <div
+          style={{
+            width: '38px',
+            height: '38px',
+            borderRadius: '50%',
+            background: 'rgba(255, 255, 255, 0.02)',
+            border: '1px solid rgba(255, 255, 255, 0.06)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'rgba(255, 255, 255, 0.25)',
+          }}
+        >
+          <Camera size={18} />
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '3px', textAlign: 'center', padding: '0 12px' }}>
+          <span className="mono" style={{ fontSize: '11px', color: 'rgba(255, 255, 255, 0.45)', fontWeight: 700 }}>
+            ЯЧЕЙКА #{cellIndex + 1}
+          </span>
+          <span style={{ fontSize: '11px', color: 'rgba(255, 255, 255, 0.25)' }}>
+            Перетащите камеру из списка или нажмите дважды
+          </span>
+        </div>
       </div>
     );
   }
@@ -159,11 +218,13 @@ export const VmsVideoCell: React.FC<Props> = ({
   const activeRTSP = cell.activeStream === 'main' ? cell.rtspMain : cell.rtspSub;
   const streamSrc = `/api/stream/mjpeg?rtsp=${encodeURIComponent(activeRTSP)}`;
   const snapshotSrc = `/api/isapi/picture?ip=${encodeURIComponent(cell.deviceIp)}&port=${cell.httpPort}&user=${encodeURIComponent(cell.login)}&pass=${encodeURIComponent(cell.password)}&channel=${encodeURIComponent(cell.channelIdHik)}&t=${cell.status}`;
+  const displayName = getCellDisplayName(cell);
 
   return (
     <div
+      ref={cellRef}
       onClick={onSelect}
-      onDoubleClick={onDoubleClick}
+      onDoubleClick={handleCellDoubleClick}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => {
         setIsHovered(false);
@@ -181,7 +242,9 @@ export const VmsVideoCell: React.FC<Props> = ({
         width: '100%',
         height: '100%',
         background: '#040507',
-        border: isDragOver
+        border: isFullscreen
+          ? 'none'
+          : isDragOver
           ? '2px dashed var(--emerald)'
           : isSelected
           ? '1px solid var(--emerald)'
@@ -204,7 +267,50 @@ export const VmsVideoCell: React.FC<Props> = ({
           justifyContent: 'center',
         }}
       >
-        {!imgError ? (
+        {cell.status === 'offline' ? (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px',
+              color: '#71717A',
+              padding: '10px',
+              paddingTop: '36px',
+              textAlign: 'center',
+              userSelect: 'none',
+              maxWidth: '100%',
+              boxSizing: 'border-box',
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                width: '34px',
+                height: '34px',
+                borderRadius: '50%',
+                background: 'rgba(239, 68, 68, 0.12)',
+                border: '1px solid rgba(239, 68, 68, 0.35)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#EF4444',
+                flexShrink: 0,
+              }}
+            >
+              <WifiOff size={17} />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', alignItems: 'center', maxWidth: '100%', minWidth: 0 }}>
+              <span style={{ fontSize: '12px', fontWeight: 700, color: '#EF4444', letterSpacing: '0.03em', whiteSpace: 'nowrap' }}>
+                НЕТ СВЯЗИ
+              </span>
+              <span className="mono" style={{ fontSize: '10.5px', color: '#A1A1AA', whiteSpace: 'nowrap' }}>
+                {cell.deviceIp}
+              </span>
+            </div>
+          </div>
+        ) : !imgError ? (
           <img
             src={streamSrc}
             alt={cell.channelName}
@@ -233,7 +339,7 @@ export const VmsVideoCell: React.FC<Props> = ({
         )}
       </div>
 
-      {/* Top Overlay Header: Channel Name, Status, Bitrate Badge, Close Button */}
+      {/* Top Overlay Header: Camera Title Bar & OSD */}
       <div
         style={{
           position: 'absolute',
@@ -241,21 +347,72 @@ export const VmsVideoCell: React.FC<Props> = ({
           left: 0,
           right: 0,
           padding: '6px 8px',
-          background: 'linear-gradient(to bottom, rgba(7, 9, 14, 0.9) 0%, rgba(7, 9, 14, 0) 100%)',
+          background: 'linear-gradient(180deg, rgba(7, 10, 16, 0.94) 0%, rgba(7, 10, 16, 0.72) 75%, rgba(7, 10, 16, 0) 100%)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          pointerEvents: isHovered ? 'auto' : 'none',
-          opacity: isHovered || isSelected ? 1 : 0.85,
+          gap: '8px',
+          opacity: isHovered || isSelected ? 1 : 0.88,
           transition: 'opacity 0.15s ease',
           zIndex: 10,
+          pointerEvents: 'auto',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span className={`status-dot ${cell.status === 'online' ? 'online' : 'offline'}`} style={{ width: '6px', height: '6px' }} />
-          <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#FFFFFF', textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}>
-            {cell.channelName}
+        {/* Left: Channel Number Tag, Status Dot, Full Resolved Camera Name, Status Badges */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            minWidth: 0,
+            flex: 1,
+          }}
+        >
+          {/* Channel number pill badge */}
+          <span
+            className="mono"
+            style={{
+              fontSize: '9px',
+              fontWeight: 800,
+              color: '#FFFFFF',
+              background: 'rgba(255, 255, 255, 0.14)',
+              border: '1px solid rgba(255, 255, 255, 0.2)',
+              padding: '1.5px 5px',
+              borderRadius: '4px',
+              letterSpacing: '0.04em',
+              flexShrink: 0,
+            }}
+            title={`Канал №${cell.channelNumber}`}
+          >
+            CH {String(cell.channelNumber || 1).padStart(2, '0')}
           </span>
+
+          {/* Status Dot */}
+          <span
+            className={`status-dot ${cell.status === 'online' ? 'online' : 'offline'}`}
+            style={{ width: '6.5px', height: '6.5px', flexShrink: 0 }}
+          />
+
+          {/* Resolved Human-readable Camera Name */}
+          <span
+            style={{
+              flex: 1,
+              minWidth: 0,
+              fontSize: '12px',
+              fontWeight: 700,
+              color: '#FFFFFF',
+              textShadow: '0 1px 3px rgba(0,0,0,0.95), 0 0 6px rgba(0,0,0,0.8)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              letterSpacing: '0.01em',
+            }}
+            title={displayName}
+          >
+            {displayName}
+          </span>
+
+          {/* REC recording indicator */}
           {cell.isRecording && (
             <span
               className="mono"
@@ -263,21 +420,24 @@ export const VmsVideoCell: React.FC<Props> = ({
                 fontSize: '9px',
                 fontWeight: 800,
                 color: '#EF4444',
-                background: 'rgba(239, 68, 68, 0.2)',
+                background: 'rgba(239, 68, 68, 0.25)',
+                border: '1px solid rgba(239, 68, 68, 0.45)',
                 padding: '1px 5px',
                 borderRadius: '4px',
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '3px',
+                flexShrink: 0,
               }}
             >
-              <Circle size={6} fill="#EF4444" />
+              <Circle size={6} fill="#EF4444" className="status-dot live-pulse" />
               REC
             </span>
           )}
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+        {/* Right: Zoom Badge, Stream HD/SD Button, Fullscreen & Close Buttons */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexShrink: 0 }}>
           {/* Zoom badge if zoomed */}
           {zoomLevel > 1 && (
             <button
@@ -289,37 +449,77 @@ export const VmsVideoCell: React.FC<Props> = ({
                 color: 'var(--emerald)',
                 background: 'rgba(16, 185, 129, 0.2)',
                 border: '1px solid var(--emerald-border)',
-                padding: '1px 6px',
+                padding: '1.5px 6px',
                 borderRadius: '4px',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '3px',
               }}
-              title="Сбросить цифровой зум"
+              title="Сбросить цифровой зум (1x)"
             >
               <RotateCcw size={9} />
               {zoomLevel}x
             </button>
           )}
 
-          {/* Stream resolution badge */}
-          <span
+          {/* Stream quality toggle badge: HD or SD */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleStream(cell.activeStream === 'main' ? 'sub' : 'main');
+            }}
             className="mono"
             style={{
               fontSize: '9.5px',
               fontWeight: 800,
-              padding: '1px 5px',
+              padding: '1.5px 6px',
               borderRadius: '4px',
               background: cell.activeStream === 'main' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(255, 255, 255, 0.1)',
               color: cell.activeStream === 'main' ? '#34D399' : '#A1A1AA',
-              border: cell.activeStream === 'main' ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid rgba(255, 255, 255, 0.1)',
+              border: cell.activeStream === 'main' ? '1px solid rgba(16, 185, 129, 0.45)' : '1px solid rgba(255, 255, 255, 0.15)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              transition: 'all 0.15s ease',
             }}
+            title={cell.activeStream === 'main' ? 'Основной поток (HD). Нажмите для переключения на SD' : 'Субпоток (SD). Нажмите для переключения на HD'}
           >
-            {cell.activeStream.toUpperCase()}
-          </span>
+            {cell.activeStream === 'main' ? 'HD' : 'SD'}
+          </button>
 
-          {/* Close Cell */}
+          {/* Fullscreen Button */}
+          <button
+            type="button"
+            onClick={handleToggleFullscreen}
+            style={{
+              background: isFullscreen ? 'rgba(239, 68, 68, 0.85)' : 'rgba(0, 0, 0, 0.55)',
+              border: isFullscreen ? 'none' : '1px solid rgba(255, 255, 255, 0.15)',
+              color: '#FFFFFF',
+              borderRadius: '4px',
+              padding: isFullscreen ? '2px 7px' : '3px',
+              fontSize: '10.5px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              transition: 'background 0.15s ease',
+            }}
+            title={isFullscreen ? 'Выйти из полноэкранного режима (Esc)' : 'На весь экран'}
+          >
+            {isFullscreen ? (
+              <>
+                <Minimize size={11} />
+                <span>Esc</span>
+              </>
+            ) : (
+              <Maximize2 size={11} />
+            )}
+          </button>
+
+          {/* Close Cell (X) */}
           <button
             type="button"
             onClick={(e) => {
@@ -327,18 +527,29 @@ export const VmsVideoCell: React.FC<Props> = ({
               onClose();
             }}
             style={{
-              background: 'rgba(0,0,0,0.5)',
-              border: 'none',
-              color: '#A1A1AA',
+              background: 'rgba(0, 0, 0, 0.55)',
+              border: '1px solid rgba(255, 255, 255, 0.15)',
+              color: '#D4D4D8',
               borderRadius: '4px',
-              padding: '2px',
+              padding: '3px',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
+              transition: 'all 0.15s ease',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = '#EF4444';
+              e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.5)';
+              e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = '#D4D4D8';
+              e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+              e.currentTarget.style.background = 'rgba(0, 0, 0, 0.55)';
             }}
             title="Очистить ячейку"
           >
-            <X size={12} />
+            <X size={11} />
           </button>
         </div>
       </div>
@@ -481,7 +692,26 @@ export const VmsVideoCell: React.FC<Props> = ({
               {cell.activeStream === 'main' ? 'HD' : 'SD'}
             </button>
 
-            {/* Maximize 1x1 */}
+            {/* На весь экран (Fullscreen монитора) */}
+            <button
+              type="button"
+              onClick={handleToggleFullscreen}
+              style={{
+                background: isFullscreen ? 'rgba(16, 185, 129, 0.35)' : 'rgba(255, 255, 255, 0.1)',
+                border: isFullscreen ? '1px solid var(--emerald)' : 'none',
+                color: isFullscreen ? '#34D399' : '#FFFFFF',
+                borderRadius: '4px',
+                padding: '4px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+              }}
+              title={isFullscreen ? 'Выйти из полноэкранного режима (Esc)' : 'На весь экран (Монитор)'}
+            >
+              {isFullscreen ? <Minimize size={12} /> : <Expand size={12} />}
+            </button>
+
+            {/* Maximize 1x1 в сетке */}
             <button
               type="button"
               onClick={(e) => {
@@ -489,16 +719,16 @@ export const VmsVideoCell: React.FC<Props> = ({
                 onDoubleClick();
               }}
               style={{
-                background: 'rgba(255, 255, 255, 0.1)',
-                border: 'none',
-                color: '#FFFFFF',
+                background: isMaximized ? 'rgba(16, 185, 129, 0.25)' : 'rgba(255, 255, 255, 0.1)',
+                border: isMaximized ? '1px solid var(--emerald-border)' : 'none',
+                color: isMaximized ? '#34D399' : '#FFFFFF',
                 borderRadius: '4px',
                 padding: '4px',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
               }}
-              title={isMaximized ? 'Восстановить сетку' : 'Развернуть 1x1'}
+              title={isMaximized ? 'Восстановить сетку' : 'Развернуть 1x1 в сетке'}
             >
               {isMaximized ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
             </button>

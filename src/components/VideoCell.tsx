@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ActiveGridCell } from '../types';
+import { ActiveGridCell, getCellDisplayName } from '../types';
 import { Camera, RefreshCw, Maximize2, ShieldAlert, Radio } from 'lucide-react';
 
 interface Props {
@@ -187,7 +187,7 @@ export const VideoCell: React.FC<Props> = ({
               color: '#FFFFFF',
             }}
           >
-            {cell.channelName}
+            {getCellDisplayName(cell)}
           </span>
         </div>
 

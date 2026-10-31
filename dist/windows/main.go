@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/tls"
@@ -26,8 +27,8 @@ import (
 )
 
 const (
-	AppName = "ProCam Viewer"
-	Version = "4.1.0"
+	AppName = "ProCam VMS"
+	Version = "4.2.0"
 )
 
 //go:embed icon.png
@@ -83,9 +84,23 @@ type NetInterfaceInfo struct {
 }
 
 var (
-	stateMu    sync.Mutex
-	serverPort int
+	stateMu          sync.Mutex
+	serverPort       int
+	recordingsMu     sync.Mutex
+	activeRecordings = make(map[string]*exec.Cmd)
+	recordingFiles   = make(map[string]string)
 )
+
+func getRecordingsDir() string {
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" {
+		vids := filepath.Join(home, "Videos", "ProCam_Recordings")
+		_ = os.MkdirAll(vids, 0755)
+		return vids
+	}
+	_ = os.MkdirAll("recordings", 0755)
+	return "recordings"
+}
 
 func withCORS(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -183,6 +198,83 @@ func saveViewsToDisk(views []CustomViewItem) error {
 	return os.WriteFile(path, data, 0644)
 }
 
+type FolderItem struct {
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	Color      string   `json:"color"`
+	CameraKeys []string `json:"cameraKeys"`
+}
+
+func getFoldersConfigPath() string {
+	configDir, err := os.UserConfigDir()
+	if err == nil && configDir != "" {
+		appDir := filepath.Join(configDir, "procam-viewer")
+		_ = os.MkdirAll(appDir, 0755)
+		return filepath.Join(appDir, "folders.json")
+	}
+	return "folders.json"
+}
+
+func loadFoldersFromDisk() []FolderItem {
+	path := getFoldersConfigPath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return []FolderItem{}
+	}
+	var list []FolderItem
+	if err := json.Unmarshal(data, &list); err != nil {
+		return []FolderItem{}
+	}
+	if list == nil {
+		return []FolderItem{}
+	}
+	return list
+}
+
+func saveFoldersToDisk(folders []FolderItem) error {
+	path := getFoldersConfigPath()
+	data, err := json.MarshalIndent(folders, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+func getStateConfigPath() string {
+	configDir, err := os.UserConfigDir()
+	if err == nil && configDir != "" {
+		appDir := filepath.Join(configDir, "procam-viewer")
+		_ = os.MkdirAll(appDir, 0755)
+		return filepath.Join(appDir, "app_state.json")
+	}
+	return "app_state.json"
+}
+
+func loadStateFromDisk() map[string]interface{} {
+	path := getStateConfigPath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return map[string]interface{}{}
+	}
+	var st map[string]interface{}
+	if err := json.Unmarshal(data, &st); err != nil {
+		return map[string]interface{}{}
+	}
+	if st == nil {
+		return map[string]interface{}{}
+	}
+	return st
+}
+
+func saveStateToDisk(st map[string]interface{}) error {
+	path := getStateConfigPath()
+	data, err := json.MarshalIndent(st, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
 func md5Hex(data string) string {
 	h := md5.Sum([]byte(data))
 	return hex.EncodeToString(h[:])
@@ -274,9 +366,35 @@ func doDigestRequestRaw(method, urlStr, user, pass string, body []byte, timeout 
 }
 
 func extractXMLTag(xmlStr, tag string) string {
-	re := regexp.MustCompile(fmt.Sprintf(`(?i)<%s>([^<]+)</%s>`, tag, tag))
+	re := regexp.MustCompile(fmt.Sprintf(`(?i)<(?:[a-zA-Z0-9_\-\.]+:%s|%s)(?:\s+[^>]*)?>([^<]+)</(?:[a-zA-Z0-9_\-\.]+:%s|%s)>`, tag, tag, tag, tag))
 	if m := re.FindStringSubmatch(xmlStr); len(m) > 1 {
 		return strings.TrimSpace(m[1])
+	}
+	return ""
+}
+
+func fetchONVIFStreamUri(ip string, port int, user, pass, token, mediaURL string) string {
+	secHeader := ""
+	if user != "" {
+		secHeader = fmt.Sprintf(`<wsse:Security xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.dtd"><wsse:UsernameToken><wsse:Username>%s</wsse:Username><wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText">%s</wsse:Password></wsse:UsernameToken></wsse:Security>`, user, pass)
+	}
+	soap := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:trt="http://www.onvif.org/ver10/media/wsdl" xmlns:tt="http://www.onvif.org/ver10/schema"><soap:Header>%s</soap:Header><soap:Body><trt:GetStreamUri><trt:StreamSetup><tt:Stream>RTP-Unicast</tt:Stream><tt:Transport><tt:Protocol>RTSP</tt:Protocol></tt:Transport></trt:StreamSetup><trt:ProfileToken>%s</trt:ProfileToken></trt:GetStreamUri></soap:Body></soap:Envelope>`, secHeader, token)
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	req, _ := http.NewRequest("POST", mediaURL, bytes.NewBufferString(soap))
+	req.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	uri := extractXMLTag(string(b), "Uri")
+	if uri != "" {
+		if user != "" && !strings.Contains(uri, "@") && strings.HasPrefix(uri, "rtsp://") {
+			uri = strings.Replace(uri, "rtsp://", fmt.Sprintf("rtsp://%s:%s@", user, pass), 1)
+		}
+		return uri
 	}
 	return ""
 }
@@ -398,20 +516,29 @@ func testTCPPort(ip string, port int, timeout time.Duration) bool {
 }
 
 func pingHost(ip string) (float64, []int) {
-	ports := []int{554, 80, 8000, 37777}
+	ports := []int{554, 80, 8000, 37777, 34567}
 	var openPorts []int
 	var totalMs float64
 	var count int
+	var mu sync.Mutex
+	var wg sync.WaitGroup
 
 	for _, p := range ports {
-		t0 := time.Now()
-		if testTCPPort(ip, p, 200*time.Millisecond) {
-			elapsed := float64(time.Since(t0).Microseconds()) / 1000.0
-			totalMs += elapsed
-			count++
-			openPorts = append(openPorts, p)
-		}
+		wg.Add(1)
+		go func(port int) {
+			defer wg.Done()
+			t0 := time.Now()
+			if testTCPPort(ip, port, 250*time.Millisecond) {
+				elapsed := float64(time.Since(t0).Microseconds()) / 1000.0
+				mu.Lock()
+				totalMs += elapsed
+				count++
+				openPorts = append(openPorts, port)
+				mu.Unlock()
+			}
+		}(p)
 	}
+	wg.Wait()
 
 	if count > 0 {
 		return float64(int((totalMs/float64(count))*10)) / 10.0, openPorts
@@ -420,9 +547,11 @@ func pingHost(ip string) (float64, []int) {
 	t0 := time.Now()
 	var out []byte
 	if runtime.GOOS == "windows" {
-		out, _ = exec.Command("ping", "-n", "1", "-w", "500", ip).CombinedOutput()
+		out, _ = exec.Command("ping", "-n", "1", "-w", "300", ip).CombinedOutput()
 	} else {
-		out, _ = exec.Command("ping", "-c", "1", "-W", "1", ip).CombinedOutput()
+		ctx, cancel := context.WithTimeout(context.Background(), 350*time.Millisecond)
+		defer cancel()
+		out, _ = exec.CommandContext(ctx, "ping", "-c", "1", "-W", "1", ip).CombinedOutput()
 	}
 	if strings.Contains(string(out), "ttl=") || strings.Contains(string(out), "TTL=") {
 		return float64(int(float64(time.Since(t0).Milliseconds())*10)) / 10.0, []int{554}
@@ -537,6 +666,70 @@ func findViewerFile(filenames ...string) string {
 	return ""
 }
 
+func ensureLinuxDesktopInstalled() {
+	if runtime.GOOS != "linux" {
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return
+	}
+
+	exePath, err := os.Executable()
+	if err != nil || exePath == "" {
+		exePath = "/home/yerniyaz/Desktop/projects/procam-viewer/ProCamViewer_Linux_x64"
+	}
+
+	// 1. Install icon
+	iconDir := filepath.Join(home, ".local", "share", "icons", "hicolor", "256x256", "apps")
+	_ = os.MkdirAll(iconDir, 0755)
+	iconTarget := filepath.Join(iconDir, "procam-viewer.png")
+	if len(embeddedIconPNG) > 0 {
+		_ = os.WriteFile(iconTarget, embeddedIconPNG, 0644)
+	}
+
+	pixmapsDir := filepath.Join(home, ".local", "share", "pixmaps")
+	_ = os.MkdirAll(pixmapsDir, 0755)
+	if len(embeddedIconPNG) > 0 {
+		_ = os.WriteFile(filepath.Join(pixmapsDir, "procam-viewer.png"), embeddedIconPNG, 0644)
+	}
+
+	appPyPath := "/home/yerniyaz/Desktop/projects/procam-viewer/app.py"
+	if _, err := os.Stat(appPyPath); err == nil {
+		exePath = appPyPath
+	}
+
+	// 2. Desktop launcher
+	desktopContent := fmt.Sprintf(`[Desktop Entry]
+Version=1.0
+Type=Application
+Name=ProCam VMS
+GenericName=CCTV Surveillance & VMS
+Comment=Профессиональный комплекс видеонаблюдения и мониторинга IP-камер
+Exec=%s
+Icon=%s
+Terminal=false
+Categories=AudioVideo;Video;Network;Security;
+StartupNotify=true
+StartupWMClass=procam-viewer
+Keywords=cctv;camera;nvr;vms;video;surveillance;
+`, exePath, iconTarget)
+
+	appsDir := filepath.Join(home, ".local", "share", "applications")
+	_ = os.MkdirAll(appsDir, 0755)
+	_ = os.WriteFile(filepath.Join(appsDir, "procam-viewer.desktop"), []byte(desktopContent), 0755)
+
+	deskDir := filepath.Join(home, "Desktop")
+	if info, err := os.Stat(deskDir); err == nil && info.IsDir() {
+		deskPath := filepath.Join(deskDir, "ProCam-VMS.desktop")
+		_ = os.WriteFile(deskPath, []byte(desktopContent), 0755)
+		_ = exec.Command("gio", "set", deskPath, "metadata::trusted", "true").Run()
+	}
+
+	_ = exec.Command("update-desktop-database", appsDir).Run()
+	_ = exec.Command("gtk-update-icon-cache", filepath.Join(home, ".local", "share", "icons", "hicolor")).Run()
+}
+
 func launchStandaloneDesktopApp(targetURL string) {
 	if runtime.GOOS == "windows" {
 		candidates := []string{
@@ -548,7 +741,18 @@ func launchStandaloneDesktopApp(targetURL string) {
 		}
 		for _, c := range candidates {
 			if _, err := os.Stat(c); err == nil {
-				cmd := exec.Command(c, fmt.Sprintf("--app=%s", targetURL), "--window-size=1440,900")
+				cmd := exec.Command(c,
+					fmt.Sprintf("--app=%s", targetURL),
+					"--window-size=1440,900",
+					"--class=ProCamViewer",
+					"--no-first-run",
+					"--no-default-browser-check",
+					"--disable-extensions",
+					"--disable-sync",
+					"--disable-translate",
+					"--disable-session-crashed-bubble",
+					"--disable-infobars",
+				)
 				prepareBackgroundCmd(cmd)
 				if err := cmd.Start(); err == nil {
 					return
@@ -557,6 +761,20 @@ func launchStandaloneDesktopApp(targetURL string) {
 		}
 		_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", targetURL).Start()
 		return
+	}
+
+	ensureLinuxDesktopInstalled()
+
+	// 1. Try Native Python GTK3/WebKit2 Desktop Window (Pure Native GNOME app, NO Chrome)
+	appPyPath := "/home/yerniyaz/Desktop/projects/procam-viewer/app.py"
+	if _, err := os.Stat(appPyPath); err == nil {
+		if pyPath, err := exec.LookPath("python3"); err == nil {
+			cmd := exec.Command(pyPath, appPyPath)
+			prepareBackgroundCmd(cmd)
+			if err := cmd.Start(); err == nil {
+				return
+			}
+		}
 	}
 
 	candidates := []string{
@@ -574,6 +792,16 @@ func launchStandaloneDesktopApp(targetURL string) {
 				fmt.Sprintf("--app=%s", targetURL),
 				"--window-size=1440,900",
 				"--class=ProCamViewer",
+				"--name=ProCamViewer",
+				"--app-id=procam-viewer",
+				"--no-first-run",
+				"--no-default-browser-check",
+				"--disable-extensions",
+				"--disable-sync",
+				"--disable-translate",
+				"--disable-features=Translate,OverscrollHistoryNavigation",
+				"--disable-session-crashed-bubble",
+				"--disable-infobars",
 				fmt.Sprintf("--user-data-dir=%s", tmpProfile),
 			)
 			prepareBackgroundCmd(cmd)
@@ -653,6 +881,8 @@ func parseDiscoveryPayload(raw []byte) (ip, mac, vendor, model, serial, fw strin
 }
 
 func main() {
+	ensureLinuxDesktopInstalled()
+
 	reqPort := "8768"
 	headless := false
 
@@ -1019,6 +1249,225 @@ func main() {
 		})
 	}))
 
+	// API: Start Recording live stream to local disk (lossless MP4 via ffmpeg stream copy)
+	http.HandleFunc("/api/record/start", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		recordingsMu.Lock()
+		defer recordingsMu.Unlock()
+
+		cellID := strings.TrimSpace(r.URL.Query().Get("id"))
+		rtspURL := strings.TrimSpace(r.URL.Query().Get("rtsp"))
+		name := strings.TrimSpace(r.URL.Query().Get("name"))
+
+		if cellID == "" {
+			cellID = "cell_default"
+		}
+		if rtspURL == "" {
+			http.Error(w, "Параметр 'rtsp' обязателен", 400)
+			return
+		}
+
+		if existingCmd, ok := activeRecordings[cellID]; ok && existingCmd != nil && existingCmd.Process != nil {
+			_ = existingCmd.Process.Signal(os.Interrupt)
+			delete(activeRecordings, cellID)
+		}
+
+		ffmpegPath, err := exec.LookPath("ffmpeg")
+		if err != nil {
+			http.Error(w, "FFmpeg не найден на сервере для записи", 500)
+			return
+		}
+
+		safeName := strings.ReplaceAll(name, " ", "_")
+		safeName = strings.ReplaceAll(safeName, "/", "_")
+		safeName = strings.ReplaceAll(safeName, "\\", "_")
+		if safeName == "" {
+			safeName = "camera"
+		}
+
+		filename := fmt.Sprintf("rec_%s_%s.mp4", safeName, time.Now().Format("20060102_150405"))
+		fullPath := filepath.Join(getRecordingsDir(), filename)
+
+		cmd := exec.Command(ffmpegPath,
+			"-rtsp_transport", "tcp",
+			"-i", rtspURL,
+			"-c", "copy",
+			"-movflags", "+faststart",
+			"-y",
+			fullPath,
+		)
+		prepareBackgroundCmd(cmd)
+
+		if err := cmd.Start(); err != nil {
+			http.Error(w, fmt.Sprintf("Ошибка старта записи: %v", err), 500)
+			return
+		}
+
+		activeRecordings[cellID] = cmd
+		recordingFiles[cellID] = fullPath
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":   true,
+			"recording": true,
+			"cellId":    cellID,
+			"filename":  filename,
+			"path":      fullPath,
+			"message":   fmt.Sprintf("Запись начата: %s", filename),
+		})
+	}))
+
+	// API: Stop Recording
+	http.HandleFunc("/api/record/stop", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		recordingsMu.Lock()
+		defer recordingsMu.Unlock()
+
+		cellID := strings.TrimSpace(r.URL.Query().Get("id"))
+		if cellID == "" {
+			cellID = "cell_default"
+		}
+
+		cmd, ok := activeRecordings[cellID]
+		fullPath := recordingFiles[cellID]
+		if !ok || cmd == nil || cmd.Process == nil {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success":   true,
+				"recording": false,
+				"message":   "Запись не была активна",
+			})
+			return
+		}
+
+		_ = cmd.Process.Signal(os.Interrupt)
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			_ = cmd.Process.Kill()
+		}
+
+		delete(activeRecordings, cellID)
+		delete(recordingFiles, cellID)
+
+		var fileSize int64
+		if fi, err := os.Stat(fullPath); err == nil {
+			fileSize = fi.Size()
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":   true,
+			"recording": false,
+			"cellId":    cellID,
+			"path":      fullPath,
+			"filename":  filepath.Base(fullPath),
+			"size":      fileSize,
+			"message":   fmt.Sprintf("Запись сохранена на диск: %s", filepath.Base(fullPath)),
+		})
+	}))
+
+	// API: Active Recording Status
+	http.HandleFunc("/api/record/status", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		recordingsMu.Lock()
+		defer recordingsMu.Unlock()
+
+		activeIDs := make([]string, 0)
+		for id := range activeRecordings {
+			activeIDs = append(activeIDs, id)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"active": activeIDs,
+		})
+	}))
+
+	// API: List Recorded Video Files on disk
+	http.HandleFunc("/api/record/list", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		type RecordFileInfo struct {
+			Filename string `json:"filename"`
+			Path     string `json:"path"`
+			Size     int64  `json:"size"`
+			Date     string `json:"date"`
+			URL      string `json:"url"`
+		}
+
+		recDir := getRecordingsDir()
+		entries, err := os.ReadDir(recDir)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"dir":     recDir,
+				"files":   []RecordFileInfo{},
+			})
+			return
+		}
+
+		list := make([]RecordFileInfo, 0)
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			lower := strings.ToLower(e.Name())
+			if strings.HasSuffix(lower, ".mp4") || strings.HasSuffix(lower, ".mkv") || strings.HasSuffix(lower, ".avi") {
+				if fi, err := e.Info(); err == nil {
+					list = append(list, RecordFileInfo{
+						Filename: e.Name(),
+						Path:     filepath.Join(recDir, e.Name()),
+						Size:     fi.Size(),
+						Date:     fi.ModTime().Format("2006-01-02 15:04:05"),
+						URL:      fmt.Sprintf("/api/record/file?name=%s", e.Name()),
+					})
+				}
+			}
+		}
+
+		sort.Slice(list, func(i, j int) bool {
+			return list[i].Date > list[j].Date
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"dir":     recDir,
+			"count":   len(list),
+			"files":   list,
+		})
+	}))
+
+	// API: Stream/Serve local recorded video file (supports HTTP 206 partial content)
+	http.HandleFunc("/api/record/file", func(w http.ResponseWriter, r *http.Request) {
+		name := filepath.Base(r.URL.Query().Get("name"))
+		if name == "" || name == "." || name == "/" {
+			http.Error(w, "Не указано имя файла", 400)
+			return
+		}
+		fullPath := filepath.Join(getRecordingsDir(), name)
+		if _, err := os.Stat(fullPath); err != nil {
+			http.Error(w, "Файл не найден", 404)
+			return
+		}
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Content-Type", "video/mp4")
+		http.ServeFile(w, r, fullPath)
+	})
+
+	// API: Open Recordings Folder in System File Manager
+	http.HandleFunc("/api/record/open-folder", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		recDir := getRecordingsDir()
+		if runtime.GOOS == "windows" {
+			_ = exec.Command("explorer.exe", recDir).Start()
+		} else {
+			_ = exec.Command("xdg-open", recDir).Start()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"dir":     recDir,
+		})
+	}))
+
 	// 8. API: Ping & Port Check
 	http.HandleFunc("/api/ping", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		ip := strings.TrimSpace(r.URL.Query().Get("ip"))
@@ -1042,6 +1491,142 @@ func main() {
 			"onvif_open": testTCPPort(ip, 80, 200*time.Millisecond),
 			"sdk_open":   testTCPPort(ip, 8000, 200*time.Millisecond) || testTCPPort(ip, 37777, 200*time.Millisecond),
 		})
+	}))
+
+	// 8b. API: Fast Batch Ping (Concurrent Health Check for all cameras)
+	http.HandleFunc("/api/ping/batch", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		var ips []string
+		if r.Method == http.MethodPost {
+			_ = json.NewDecoder(r.Body).Decode(&ips)
+		}
+		if len(ips) == 0 {
+			devs := loadDevicesFromDisk()
+			for _, d := range devs {
+				if d.IP != "" {
+					ips = append(ips, d.IP)
+				}
+			}
+		}
+
+		ipMap := make(map[string]bool)
+		var uniqueIPs []string
+		for _, ip := range ips {
+			ip = strings.TrimSpace(ip)
+			if ip != "" && !ipMap[ip] {
+				ipMap[ip] = true
+				uniqueIPs = append(uniqueIPs, ip)
+			}
+		}
+
+		type HostPingResult struct {
+			IP        string  `json:"ip"`
+			Status    string  `json:"status"`
+			PingMs    float64 `json:"ping_ms"`
+			Ports     []int   `json:"ports"`
+			RTSPOpen  bool    `json:"rtsp_open"`
+			ONVIFOpen bool    `json:"onvif_open"`
+		}
+
+		results := make(map[string]HostPingResult)
+		var resMu sync.Mutex
+		var wg sync.WaitGroup
+
+		for _, ip := range uniqueIPs {
+			wg.Add(1)
+			go func(targetIP string) {
+				defer wg.Done()
+				ms, ports := pingHost(targetIP)
+				status := "offline"
+				if ms > 0 {
+					status = "online"
+				}
+				rtspOpen := false
+				onvifOpen := false
+				for _, p := range ports {
+					if p == 554 {
+						rtspOpen = true
+					}
+					if p == 80 {
+						onvifOpen = true
+					}
+				}
+				resMu.Lock()
+				results[targetIP] = HostPingResult{
+					IP:        targetIP,
+					Status:    status,
+					PingMs:    ms,
+					Ports:     ports,
+					RTSPOpen:  rtspOpen,
+					ONVIFOpen: onvifOpen,
+				}
+				resMu.Unlock()
+			}(ip)
+		}
+		wg.Wait()
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"results": results,
+			"count":   len(results),
+		})
+	}))
+
+	// API: Folder Persistence (GET and POST /api/folders)
+	http.HandleFunc("/api/folders", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		stateMu.Lock()
+		defer stateMu.Unlock()
+
+		if r.Method == http.MethodPost {
+			var newFolders []FolderItem
+			if err := json.NewDecoder(r.Body).Decode(&newFolders); err != nil {
+				http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), 400)
+				return
+			}
+			if err := saveFoldersToDisk(newFolders); err != nil {
+				http.Error(w, fmt.Sprintf("Save failed: %v", err), 500)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"count":   len(newFolders),
+				"message": "Папки успешно сохранены",
+			})
+			return
+		}
+
+		folders := loadFoldersFromDisk()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(folders)
+	}))
+
+	// API: Full App State Persistence (Layout, Active Cells, Selected Cell)
+	http.HandleFunc("/api/state", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		stateMu.Lock()
+		defer stateMu.Unlock()
+
+		if r.Method == http.MethodPost {
+			var st map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&st); err != nil {
+				http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), 400)
+				return
+			}
+			if err := saveStateToDisk(st); err != nil {
+				http.Error(w, fmt.Sprintf("Save failed: %v", err), 500)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"message": "Состояние VMS успешно сохранено",
+			})
+			return
+		}
+
+		st := loadStateFromDisk()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(st)
 	}))
 
 	// 9. API: Network Radar Scan (ONVIF WS-Discovery + SADP + Dahua + ARP)
@@ -1278,7 +1863,7 @@ func main() {
 
 		soapProfiles := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:trt="http://www.onvif.org/ver10/media/wsdl"><soap:Header>%s</soap:Header><soap:Body><trt:GetProfiles/></soap:Body></soap:Envelope>`, secHeader)
 
-		urlMedia := fmt.Sprintf("http://%s:%d/onvif/media_service", ip, port)
+		urlMedia := fmt.Sprintf("http://%s:%d/onvif/media", ip, port)
 		client := &http.Client{Timeout: 3 * time.Second}
 		req, _ := http.NewRequest("POST", urlMedia, bytes.NewBufferString(soapProfiles))
 		req.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
@@ -1288,6 +1873,15 @@ func main() {
 		if err == nil {
 			body, _ = io.ReadAll(resp.Body)
 			resp.Body.Close()
+		}
+		if len(body) == 0 || !strings.Contains(string(body), "Profiles") {
+			urlMedia = fmt.Sprintf("http://%s:%d/onvif/media_service", ip, port)
+			req2, _ := http.NewRequest("POST", urlMedia, bytes.NewBufferString(soapProfiles))
+			req2.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
+			if resp2, err2 := client.Do(req2); err2 == nil {
+				body, _ = io.ReadAll(resp2.Body)
+				resp2.Body.Close()
+			}
 		}
 
 		type ONVIFProfile struct {
@@ -1307,10 +1901,21 @@ func main() {
 		for i, tm := range tokens {
 			token := tm[1]
 			profName := fmt.Sprintf("Профиль %d (%s)", i+1, token)
-			rtspMain := fmt.Sprintf("rtsp://%s:%s@%s:554/live/ch%d", user, pass, ip, i)
-			rtspSub := fmt.Sprintf("rtsp://%s:%s@%s:554/live/ch%d_sub", user, pass, ip, i)
-			res := "1920x1080"
-			if i > 0 {
+			uri := fetchONVIFStreamUri(ip, port, user, pass, token, urlMedia)
+			rtspMain := uri
+			if rtspMain == "" {
+				if i == 0 {
+					rtspMain = fmt.Sprintf("rtsp://%s:%s@%s:554/stream1", user, pass, ip)
+				} else {
+					rtspMain = fmt.Sprintf("rtsp://%s:%s@%s:554/stream2", user, pass, ip)
+				}
+			}
+			rtspSub := fetchONVIFStreamUri(ip, port, user, pass, token, urlMedia)
+			if rtspSub == "" || rtspSub == rtspMain {
+				rtspSub = fmt.Sprintf("rtsp://%s:%s@%s:554/stream2", user, pass, ip)
+			}
+			res := "2560x1440"
+			if i > 0 || strings.Contains(strings.ToLower(token), "sub") {
 				res = "640x360"
 			}
 			profiles = append(profiles, ONVIFProfile{
@@ -1523,6 +2128,79 @@ func main() {
 		})
 	}))
 
+	// 15. API: Download NVR Archive Segment via RTSP / ISAPI
+	http.HandleFunc("/api/isapi/playback/download", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		ip := strings.TrimSpace(r.URL.Query().Get("ip"))
+		user := r.URL.Query().Get("user")
+		pass := r.URL.Query().Get("pass")
+		channel := r.URL.Query().Get("channel")
+		dateStr := strings.TrimSpace(r.URL.Query().Get("date"))
+		startStr := strings.TrimSpace(r.URL.Query().Get("start"))
+		endStr := strings.TrimSpace(r.URL.Query().Get("end"))
+
+		if user == "" {
+			user = "admin"
+		}
+		if channel == "" {
+			channel = "1"
+		}
+		if dateStr == "" {
+			dateStr = time.Now().Format("2006-01-02")
+		}
+
+		cleanDate := strings.ReplaceAll(dateStr, "-", "")
+		normStart := startStr
+		if len(startStr) == 8 && strings.Count(startStr, ":") == 2 {
+			normStart = fmt.Sprintf("%sT%sZ", cleanDate, strings.ReplaceAll(startStr, ":", ""))
+		}
+		normEnd := endStr
+		if len(endStr) == 8 && strings.Count(endStr, ":") == 2 {
+			normEnd = fmt.Sprintf("%sT%sZ", cleanDate, strings.ReplaceAll(endStr, ":", ""))
+		}
+
+		rtspTrack := fmt.Sprintf("rtsp://%s:%s@%s:554/Streaming/tracks/%s01?starttime=%s&endtime=%s",
+			user, pass, ip, channel, normStart, normEnd)
+
+		ffmpegPath, err := exec.LookPath("ffmpeg")
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(500)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "FFmpeg не найден на сервере для экспорта архива",
+			})
+			return
+		}
+
+		safeIP := strings.ReplaceAll(ip, ".", "_")
+		filename := fmt.Sprintf("archive_%s_ch%s_%s.mp4", safeIP, channel, time.Now().Format("20060102_150405"))
+		fullPath := filepath.Join(getRecordingsDir(), filename)
+
+		cmd := exec.Command(ffmpegPath,
+			"-rtsp_transport", "tcp",
+			"-i", rtspTrack,
+			"-t", "300",
+			"-c", "copy",
+			"-movflags", "+faststart",
+			"-y",
+			fullPath,
+		)
+		prepareBackgroundCmd(cmd)
+
+		go func() {
+			_ = cmd.Run()
+		}()
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":     true,
+			"filename":    filename,
+			"path":        fullPath,
+			"downloadUrl": fmt.Sprintf("/api/record/file?name=%s", filename),
+			"message":     fmt.Sprintf("Экспорт архива запущен: %s", filename),
+		})
+	}))
+
 	// 9. Downloads: EXE for Windows, Linux binary and Manual PDF
 	http.HandleFunc("/download/windows", func(w http.ResponseWriter, r *http.Request) {
 		p := findViewerFile("ProCamViewer_Windows_x64.exe")
@@ -1627,7 +2305,7 @@ const fallbackHTML = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>ProCam Viewer v4.1 — Системы видеонаблюдения · Инженерный комплекс</title>
+<title>ProCam VMS — Профессиональная система видеонаблюдения</title>
 <link rel="icon" type="image/png" href="/icon.png" />
 <style>
   :root {
@@ -1664,7 +2342,7 @@ const fallbackHTML = `<!DOCTYPE html>
 </head>
 <body>
   <div class="card">
-    <h2>Стриминг-сервер ProCam Viewer активен</h2>
+    <h2>Стриминг-сервер ProCam VMS активен</h2>
     <p>Для запуска полного графического интерфейса скомпилируйте веб-пакет командой <code>npm run build:web</code>.</p>
   </div>
 </body>

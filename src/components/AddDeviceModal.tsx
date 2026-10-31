@@ -28,7 +28,7 @@ export const AddDeviceModal: React.FC<Props> = ({ isOpen, onClose, onSaveDevice 
       id: 'ch-1',
       channelNumber: 1,
       channelIdHik: '101',
-      name: 'Основной поток (Profile_1)',
+      name: 'Камера 1',
       enabled: true,
       rtspMain: 'rtsp://admin:12345@192.168.1.64:554/live/main',
       rtspSub: 'rtsp://admin:12345@192.168.1.64:554/live/sub',
@@ -57,8 +57,8 @@ export const AddDeviceModal: React.FC<Props> = ({ isOpen, onClose, onSaveDevice 
 
       if (currentProto === 'onvif') {
         if (count === 1) {
-          mainURL = `rtsp://${login}:${password}@${ip}:${port}/live/main`;
-          subURL = `rtsp://${login}:${password}@${ip}:${port}/live/sub`;
+          mainURL = `rtsp://${login}:${password}@${ip}:${port}/stream1`;
+          subURL = `rtsp://${login}:${password}@${ip}:${port}/stream2`;
         } else {
           mainURL = `rtsp://${login}:${password}@${ip}:${port}/live/ch${i}`;
           subURL = `rtsp://${login}:${password}@${ip}:${port}/live/ch${i}_sub`;
@@ -75,7 +75,7 @@ export const AddDeviceModal: React.FC<Props> = ({ isOpen, onClose, onSaveDevice 
         id: `ch-${i}-${Date.now()}`,
         channelNumber: i,
         channelIdHik: `${i}01`,
-        name: count === 1 ? 'Основной поток (Канал 1)' : `Канал ${i}`,
+        name: count === 1 ? (name.trim() || 'Камера 1') : `Канал ${i}`,
         enabled: true,
         rtspMain: mainURL,
         rtspSub: subURL,
@@ -280,6 +280,10 @@ export const AddDeviceModal: React.FC<Props> = ({ isOpen, onClose, onSaveDevice 
       channels: channels.map((ch) => ({
         ...ch,
         id: `${deviceId}-ch-${ch.channelNumber}`,
+        name:
+          type === 'camera' && (!ch.name || /^(основной поток|субпоток|profile|stream)/i.test(ch.name))
+            ? (name.trim() || 'Камера 1')
+            : ch.name,
       })),
       status: 'online',
       pingMs: 1.5,

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ActiveGridCell, DeviceItem, LogEntry } from '../types';
+import { ActiveGridCell, DeviceItem, LogEntry, getCellDisplayName } from '../types';
 import {
   Activity,
   Terminal,
@@ -118,7 +118,7 @@ export const DiagnosticsDock: React.FC<Props> = ({
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div>
                 <span style={{ fontSize: '14px', fontWeight: 700, color: '#FFFFFF' }}>
-                  {selectedCell.deviceName} — {selectedCell.channelName}
+                  {getCellDisplayName(selectedCell)}
                 </span>
                 <div style={{ fontSize: '11.5px', color: 'var(--muted)', marginTop: '2px' }}>
                   Канал №{selectedCell.channelNumber} · Протокол: {selectedCell.deviceProtocol.toUpperCase()} (Digest Auth)
