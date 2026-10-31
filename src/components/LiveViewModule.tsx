@@ -401,6 +401,16 @@ export const LiveViewModule: React.FC<Props> = ({
     ).catch(() => {});
   };
 
+  const isAnyRecording = cells.some((c) => c.isRecording);
+  const handleToggleRecordAll = () => {
+    if (!onToggleRecord) return;
+    if (isAnyRecording) {
+      cells.filter((c) => c.isRecording).forEach((c) => onToggleRecord(c));
+    } else {
+      cells.forEach((c) => onToggleRecord(c));
+    }
+  };
+
   // CSS Grid Template Style Generator
   const getGridStyle = (): React.CSSProperties => {
     switch (layout) {
@@ -2081,6 +2091,36 @@ export const LiveViewModule: React.FC<Props> = ({
             >
               <Camera size={11} />
               Стена
+            </button>
+
+            <button
+              type="button"
+              onClick={handleToggleRecordAll}
+              className="btn-pill"
+              style={{
+                padding: '2px 9px',
+                fontSize: '11px',
+                height: '24px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+                background: isAnyRecording ? 'rgba(239, 68, 68, 0.25)' : 'rgba(255, 255, 255, 0.05)',
+                border: isAnyRecording ? '1px solid #EF4444' : '1px solid rgba(255, 255, 255, 0.1)',
+                color: isAnyRecording ? '#EF4444' : '#E4E4E7',
+                fontWeight: isAnyRecording ? 700 : 500,
+              }}
+              title={isAnyRecording ? 'Остановить запись всех активных камер' : 'Начать параллельную запись всех камер на диск ПК'}
+            >
+              <span
+                style={{
+                  width: '7px',
+                  height: '7px',
+                  borderRadius: '50%',
+                  background: '#EF4444',
+                  display: 'inline-block',
+                }}
+              />
+              <span>{isAnyRecording ? 'Стоп REC' : 'REC Все'}</span>
             </button>
           </div>
         </div>
