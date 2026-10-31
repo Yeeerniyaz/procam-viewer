@@ -25,6 +25,7 @@ interface Props {
   onEditDevice: (dev: DeviceItem) => void;
   onAddDiscoveredDevices: (newDevs: DeviceItem[]) => void;
   onTestPing: (ip: string) => void;
+  onUpdateDevice?: (dev: DeviceItem) => void;
 }
 
 export const DeviceManagementModule: React.FC<Props> = ({
@@ -35,11 +36,93 @@ export const DeviceManagementModule: React.FC<Props> = ({
   onEditDevice,
   onAddDiscoveredDevices,
   onTestPing,
+  onUpdateDevice,
 }) => {
   const [isScanning, setIsScanning] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoveredCam[]>([]);
   const [selectedDiscovered, setSelectedDiscovered] = useState<Record<string, boolean>>({});
   const [filterQuery, setFilterQuery] = useState('');
+
+  // Switch channels count for an existing device (e.g. 1 -> 4, 8, 16)
+  const handleChangeChannelCount = (dev: DeviceItem, count: number) => {
+    if (!onUpdateDevice) return;
+    const isNvr = count > 1;
+    const updatedChannels: ChannelItem[] = [];
+    for (let i = 1; i <= count; i++) {
+      let mainURL = `rtsp://${dev.login}:${dev.password}@${dev.ip}:${dev.rtspPort}/Streaming/Channels/${i}01`;
+      let subURL = `rtsp://${dev.login}:${dev.password}@${dev.ip}:${dev.rtspPort}/Streaming/Channels/${i}02`;
+      if (dev.protocol === 'onvif') {
+        if (count === 1) {
+          mainURL = `rtsp://${dev.login}:${dev.password}@${dev.ip}:${dev.rtspPort}/stream1`;
+          subURL = `rtsp://${dev.login}:${dev.password}@${dev.ip}:${dev.rtspPort}/stream2`;
+        } else {
+          mainURL = `rtsp://${dev.login}:${dev.password}@${dev.ip}:${dev.rtspPort}/live/ch${i}`;
+          subURL = `rtsp://${dev.login}:${dev.password}@${dev.ip}:${dev.rtspPort}/live/ch${i}_sub`;
+        }
+      } else if (dev.protocol === 'dahua') {
+        mainURL = `rtsp://${dev.login}:${dev.password}@${dev.ip}:${dev.rtspPort}/cam/realmonitor?channel=${i}&subtype=0`;
+        subURL = `rtsp://${dev.login}:${dev.password}@${dev.ip}:${dev.rtspPort}/cam/realmonitor?channel=${i}&subtype=1`;
+      }
+      updatedChannels.push({
+        id: `${dev.id}-ch${i}`,
+        channelNumber: i,
+        channelIdHik: `${i}01`,
+        name: count === 1 ? dev.name : `Канал ${i}`,
+        enabled: true,
+        rtspMain: mainURL,
+        rtspSub: subURL,
+        activeStream: 'main',
+        status: 'online',
+        pingMs: 1.5,
+        resolution: '1920x1080',
+        codec: 'H.265+',
+      });
+    }
+    onUpdateDevice({
+      ...dev,
+      type: isNvr ? 'nvr' : 'camera',
+      channelsCount: count,
+      channels: updatedChannels,
+    });
+  };
+
+  // Auto-poll real channels for an existing NVR device via ISAPI
+  const handleAutoPollDevice = async (dev: DeviceItem) => {
+    if (!onUpdateDevice) return;
+    try {
+      const res = await fetch(
+        `/api/isapi/channels?ip=${encodeURIComponent(dev.ip)}&port=${dev.httpPort}&user=${encodeURIComponent(dev.login)}&pass=${encodeURIComponent(dev.password)}&rtspPort=${dev.rtspPort}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.channels) && data.channels.length > 0) {
+          const polled: ChannelItem[] = data.channels.map((ch: any) => ({
+            id: `${dev.id}-ch${ch.channelNumber}`,
+            channelNumber: ch.channelNumber,
+            channelIdHik: ch.channelIdHik || `${ch.channelNumber}01`,
+            name: ch.name || `Канал ${ch.channelNumber}`,
+            enabled: ch.enabled !== false,
+            rtspMain: ch.rtspMain,
+            rtspSub: ch.rtspSub,
+            activeStream: 'main',
+            status: 'online',
+            pingMs: 1.5,
+            resolution: ch.resolution || '2560x1440',
+            codec: ch.codec || 'H.265+',
+          }));
+          onUpdateDevice({
+            ...dev,
+            type: polled.length > 1 ? 'nvr' : 'camera',
+            channelsCount: polled.length,
+            channels: polled,
+          });
+          alert(`✔ Найдено ${polled.length} каналов для устройства ${dev.name}!`);
+          return;
+        }
+      }
+    } catch (e) {}
+    alert(`Не удалось автоматически опросить каналы для ${dev.ip}. Проверьте порт, логин и пароль.`);
+  };
 
   // Start Network Radar Scan (ONVIF WS-Discovery + SADP + Dahua + ARP)
   const handleStartScan = async () => {
@@ -89,36 +172,47 @@ export const DeviceManagementModule: React.FC<Props> = ({
 
     const newDeviceItems: DeviceItem[] = toAdd.map((d, idx) => {
       const devId = `disc-${Date.now()}-${idx}`;
+      const isNvr = d.type === 'nvr' || /nvr|dvr|xvr|recorder|storage|760|770/i.test(`${d.model} ${d.vendor}`);
+      const chCount = isNvr ? 8 : 1;
+      const chList: ChannelItem[] = [];
+      for (let i = 1; i <= chCount; i++) {
+        chList.push({
+          id: `${devId}-ch${i}`,
+          channelNumber: i,
+          channelIdHik: `${i}01`,
+          name: chCount === 1
+            ? (d.model ? `${d.vendor || 'Камера'} ${d.model}` : `${d.vendor || 'IP-Камера'}`)
+            : `Канал ${i}`,
+          enabled: true,
+          rtspMain: chCount === 1
+            ? `rtsp://admin:123456@${d.ip}:${d.rtspPort || 554}/stream1`
+            : `rtsp://admin:123456@${d.ip}:${d.rtspPort || 554}/Streaming/Channels/${i}01`,
+          rtspSub: chCount === 1
+            ? `rtsp://admin:123456@${d.ip}:${d.rtspPort || 554}/stream2`
+            : `rtsp://admin:123456@${d.ip}:${d.rtspPort || 554}/Streaming/Channels/${i}02`,
+          activeStream: 'main',
+          status: 'online',
+          pingMs: 1.5,
+          resolution: '1920x1080',
+          codec: 'H.264 / H.265',
+        });
+      }
+
       return {
         id: devId,
         name: d.model ? `${d.vendor || 'Камера'} ${d.model}` : `${d.vendor || 'IP-Камера'} (${d.ip})`,
-        type: d.type || 'camera',
+        type: isNvr ? 'nvr' : 'camera',
         protocol: d.protocol || 'onvif',
         ip: d.ip,
         httpPort: d.httpPort || 80,
         rtspPort: d.rtspPort || 554,
         login: 'admin',
         password: '123456',
-        channelsCount: 1,
-        channels: [
-          {
-            id: `${devId}-ch1`,
-            channelNumber: 1,
-            channelIdHik: '101',
-            name: d.model ? `${d.vendor || 'Камера'} ${d.model}` : `${d.vendor || 'IP-Камера'}`,
-            enabled: true,
-            rtspMain: `rtsp://admin:123456@${d.ip}:${d.rtspPort || 554}/stream1`,
-            rtspSub: `rtsp://admin:123456@${d.ip}:${d.rtspPort || 554}/stream2`,
-            activeStream: 'main',
-            status: 'online',
-            pingMs: 1.5,
-            resolution: '1920x1080',
-            codec: 'H.264 / H.265',
-          },
-        ],
+        channelsCount: chCount,
+        channels: chList,
         status: 'online',
         pingMs: 1.5,
-        model: d.model || 'ONVIF Device',
+        model: d.model || (isNvr ? 'NVR Recorder' : 'ONVIF Device'),
         serial: d.serial || '',
         firmware: d.firmware || '',
         expanded: true,
@@ -333,8 +427,35 @@ export const DeviceManagementModule: React.FC<Props> = ({
                       </td>
 
                       {/* Channels */}
-                      <td className="mono" style={{ padding: '10px 14px', color: 'var(--emerald)', fontWeight: 700 }}>
-                        {dev.channels.length} кан.
+                      <td style={{ padding: '8px 14px' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                          <span className="mono" style={{ fontSize: '11px', color: 'var(--emerald)', fontWeight: 700 }}>
+                            {dev.channels.length} {dev.channels.length === 1 ? 'канал' : 'каналов'}
+                          </span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                            {[1, 4, 8, 16].map((cnt) => (
+                              <button
+                                key={cnt}
+                                type="button"
+                                className={`tab-pill mono ${dev.channels.length === cnt ? 'active' : ''}`}
+                                onClick={() => handleChangeChannelCount(dev, cnt)}
+                                style={{ padding: '1px 5px', fontSize: '9px', lineHeight: '12px' }}
+                                title={`Переключить устройство на ${cnt} каналов`}
+                              >
+                                {cnt}к
+                              </button>
+                            ))}
+                            <button
+                              type="button"
+                              className="btn-pill"
+                              onClick={() => handleAutoPollDevice(dev)}
+                              style={{ padding: '1px 5px', fontSize: '9px', lineHeight: '12px', color: 'var(--emerald)' }}
+                              title="Автоопрос реальных каналов NVR (ISAPI)"
+                            >
+                              <RefreshCw size={9} />
+                            </button>
+                          </div>
+                        </div>
                       </td>
 
                       {/* Serial */}
@@ -345,6 +466,17 @@ export const DeviceManagementModule: React.FC<Props> = ({
                       {/* Actions */}
                       <td style={{ padding: '10px 14px', textAlign: 'right' }}>
                         <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                          <button
+                            type="button"
+                            className="btn-pill"
+                            style={{ padding: '4px 8px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                            onClick={() => onEditDevice(dev)}
+                            title="Редактировать параметры устройства и каналов"
+                          >
+                            <Edit size={12} color="#60A5FA" />
+                            <span>Изменить</span>
+                          </button>
+
                           <button
                             type="button"
                             className="btn-pill"

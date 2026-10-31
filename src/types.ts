@@ -75,6 +75,8 @@ export interface ActiveGridCell {
   resolution: string;
   fps: number;
   bitrateKbps: number;
+  deviceType?: DeviceType;
+  deviceChannelsCount?: number;
   isRecording?: boolean;
   isMuted?: boolean;
   zoomLevel?: number;

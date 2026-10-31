@@ -6,39 +6,47 @@ interface Props {
   isOpen: boolean;
   onClose: () => void;
   onSaveDevice: (device: DeviceItem) => void;
+  initialDevice?: DeviceItem | null;
 }
 
-export const AddDeviceModal: React.FC<Props> = ({ isOpen, onClose, onSaveDevice }) => {
+export const AddDeviceModal: React.FC<Props> = ({ isOpen, onClose, onSaveDevice, initialDevice }) => {
   if (!isOpen) return null;
 
-  const [type, setType] = useState<DeviceType>('camera');
-  const [protocol, setProtocol] = useState<DeviceProtocol>('onvif');
-  const [name, setName] = useState('IP-Камера (ONVIF)');
-  const [ip, setIp] = useState('192.168.1.64');
-  const [httpPort, setHttpPort] = useState('80');
-  const [rtspPort, setRtspPort] = useState('554');
-  const [login, setLogin] = useState('admin');
-  const [password, setPassword] = useState('12345');
+  const [type, setType] = useState<DeviceType>(initialDevice?.type || 'camera');
+  const [protocol, setProtocol] = useState<DeviceProtocol>(initialDevice?.protocol || 'onvif');
+  const [name, setName] = useState(initialDevice?.name || 'IP-Камера (ONVIF)');
+  const [ip, setIp] = useState(initialDevice?.ip || '192.168.1.64');
+  const [httpPort, setHttpPort] = useState(initialDevice ? String(initialDevice.httpPort) : '80');
+  const [rtspPort, setRtspPort] = useState(initialDevice ? String(initialDevice.rtspPort) : '554');
+  const [login, setLogin] = useState(initialDevice?.login || 'admin');
+  const [password, setPassword] = useState(initialDevice?.password || '12345');
   const [showPassword, setShowPassword] = useState(false);
-  const [channelsCount, setChannelsCount] = useState<number>(1);
+  const [channelsCount, setChannelsCount] = useState<number>(
+    initialDevice ? (initialDevice.channelsCount || initialDevice.channels.length) : 1
+  );
 
   // Channels state
-  const [channels, setChannels] = useState<ChannelItem[]>([
-    {
-      id: 'ch-1',
-      channelNumber: 1,
-      channelIdHik: '101',
-      name: 'Камера 1',
-      enabled: true,
-      rtspMain: 'rtsp://admin:12345@192.168.1.64:554/live/main',
-      rtspSub: 'rtsp://admin:12345@192.168.1.64:554/live/sub',
-      activeStream: 'main',
-      status: 'checking',
-      pingMs: 0,
-      resolution: '1920x1080',
-      codec: 'H.264 / H.265',
-    },
-  ]);
+  const [channels, setChannels] = useState<ChannelItem[]>(() => {
+    if (initialDevice && initialDevice.channels && initialDevice.channels.length > 0) {
+      return initialDevice.channels;
+    }
+    return [
+      {
+        id: 'ch-1',
+        channelNumber: 1,
+        channelIdHik: '101',
+        name: 'Камера 1',
+        enabled: true,
+        rtspMain: 'rtsp://admin:12345@192.168.1.64:554/live/main',
+        rtspSub: 'rtsp://admin:12345@192.168.1.64:554/live/sub',
+        activeStream: 'main',
+        status: 'checking',
+        pingMs: 0,
+        resolution: '1920x1080',
+        codec: 'H.264 / H.265',
+      },
+    ];
+  });
 
   // Test connection state
   const [isTesting, setIsTesting] = useState(false);
@@ -265,7 +273,7 @@ export const AddDeviceModal: React.FC<Props> = ({ isOpen, onClose, onSaveDevice 
   const handleSave = () => {
     if (!ip.trim()) return;
 
-    const deviceId = `dev-${Date.now()}`;
+    const deviceId = initialDevice?.id || `dev-${Date.now()}`;
     const newDevice: DeviceItem = {
       id: deviceId,
       name: name.trim() || (type === 'nvr' ? 'Видеорегистратор NVR' : 'IP-Камера'),

@@ -1345,31 +1345,6 @@ func main() {
 			user = "admin"
 		}
 
-		urlStr := fmt.Sprintf("http://%s:%d/ISAPI/Streaming/channels", ip, port)
-		code, _, body, err := doDigestRequestRaw("GET", urlStr, user, pass, nil, 4000*time.Millisecond)
-
-		w.Header().Set("Content-Type", "application/json")
-		if err != nil {
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"success": false,
-				"error":   fmt.Sprintf("Ошибка опроса каналов: %v", err),
-			})
-			return
-		}
-
-		if code != http.StatusOK {
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"success": false,
-				"code":    code,
-				"error":   fmt.Sprintf("HTTP %d при чтении Streaming/channels", code),
-			})
-			return
-		}
-
-		xmlStr := string(body)
-		reChan := regexp.MustCompile(`(?s)<StreamingChannel[^>]*>(.*?)</StreamingChannel>`)
-		matches := reChan.FindAllStringSubmatch(xmlStr, -1)
-
 		type FoundChannel struct {
 			ID           string `json:"id"`
 			ChannelNo    int    `json:"channelNumber"`
@@ -1385,60 +1360,175 @@ func main() {
 		var foundList []FoundChannel
 		seenMain := make(map[int]bool)
 
-		for _, m := range matches {
-			block := m[1]
-			idStr := extractXMLTag(block, "id")
-			chName := extractXMLTag(block, "channelName")
-			enabledStr := extractXMLTag(block, "enabled")
-			codec := extractXMLTag(block, "videoCodecType")
-			wStr := extractXMLTag(block, "videoResolutionWidth")
-			hStr := extractXMLTag(block, "videoResolutionHeight")
+		urlStr := fmt.Sprintf("http://%s:%d/ISAPI/Streaming/channels", ip, port)
+		code, _, body, err := doDigestRequestRaw("GET", urlStr, user, pass, nil, 4000*time.Millisecond)
 
-			idNum, _ := strconv.Atoi(idStr)
-			if idNum <= 0 {
-				continue
-			}
+		if err == nil && code == http.StatusOK && len(body) > 0 {
+			xmlStr := string(body)
+			reChan := regexp.MustCompile(`(?s)<StreamingChannel[^>]*>(.*?)</StreamingChannel>`)
+			matches := reChan.FindAllStringSubmatch(xmlStr, -1)
 
-			// In Hikvision: 101 = Ch 1 Main, 102 = Ch 1 Sub; 201 = Ch 2 Main, 202 = Ch 2 Sub
-			var chNo int
-			if idNum%100 == 1 {
-				chNo = idNum / 100
-			} else if idNum < 100 {
-				chNo = idNum
-			} else {
-				continue
-			}
+			for _, m := range matches {
+				block := m[1]
+				idStr := extractXMLTag(block, "id")
+				chName := extractXMLTag(block, "channelName")
+				enabledStr := extractXMLTag(block, "enabled")
+				codec := extractXMLTag(block, "videoCodecType")
+				wStr := extractXMLTag(block, "videoResolutionWidth")
+				hStr := extractXMLTag(block, "videoResolutionHeight")
 
-			if seenMain[chNo] {
-				continue
-			}
-			seenMain[chNo] = true
+				idNum, _ := strconv.Atoi(idStr)
+				if idNum <= 0 {
+					continue
+				}
 
-			if chName == "" {
-				chName = fmt.Sprintf("Канал %d", chNo)
-			}
-			if codec == "" {
-				codec = "H.265+"
-			}
-			res := "2560x1440"
-			if wStr != "" && hStr != "" {
-				res = fmt.Sprintf("%sx%s", wStr, hStr)
-			}
+				// In Hikvision: 101 = Ch 1 Main, 102 = Ch 1 Sub; 201 = Ch 2 Main, 202 = Ch 2 Sub
+				var chNo int
+				if idNum%100 == 1 {
+					chNo = idNum / 100
+				} else if idNum < 100 {
+					chNo = idNum
+				} else {
+					continue
+				}
 
-			rtspMain := fmt.Sprintf("rtsp://%s:%s@%s:%d/Streaming/Channels/%d01", user, pass, ip, rtspPort, chNo)
-			rtspSub := fmt.Sprintf("rtsp://%s:%s@%s:%d/Streaming/Channels/%d02", user, pass, ip, rtspPort, chNo)
+				if seenMain[chNo] {
+					continue
+				}
+				seenMain[chNo] = true
 
-			foundList = append(foundList, FoundChannel{
-				ID:           fmt.Sprintf("hik-ch-%d", chNo),
-				ChannelNo:    chNo,
-				ChannelIdHik: fmt.Sprintf("%d01", chNo),
-				Name:         chName,
-				Enabled:      enabledStr != "false",
-				RTSPMain:     rtspMain,
-				RTSPSub:      rtspSub,
-				Codec:        codec,
-				Resolution:   res,
-			})
+				if chName == "" {
+					chName = fmt.Sprintf("Канал %d", chNo)
+				}
+				if codec == "" {
+					codec = "H.265+"
+				}
+				res := "2560x1440"
+				if wStr != "" && hStr != "" {
+					res = fmt.Sprintf("%sx%s", wStr, hStr)
+				}
+
+				rtspMain := fmt.Sprintf("rtsp://%s:%s@%s:%d/Streaming/Channels/%d01", user, pass, ip, rtspPort, chNo)
+				rtspSub := fmt.Sprintf("rtsp://%s:%s@%s:%d/Streaming/Channels/%d02", user, pass, ip, rtspPort, chNo)
+
+				foundList = append(foundList, FoundChannel{
+					ID:           fmt.Sprintf("hik-ch-%d", chNo),
+					ChannelNo:    chNo,
+					ChannelIdHik: fmt.Sprintf("%d01", chNo),
+					Name:         chName,
+					Enabled:      enabledStr != "false",
+					RTSPMain:     rtspMain,
+					RTSPSub:      rtspSub,
+					Codec:        codec,
+					Resolution:   res,
+				})
+			}
+		}
+
+		// Fallback / Extension for Hikvision NVR IP Channels (/ISAPI/ContentMgmt/InputProxy/channels)
+		// Many Hikvision NVRs store connected digital IP cameras in InputProxy
+		if len(foundList) <= 1 {
+			proxyURL := fmt.Sprintf("http://%s:%d/ISAPI/ContentMgmt/InputProxy/channels", ip, port)
+			pCode, _, pBody, pErr := doDigestRequestRaw("GET", proxyURL, user, pass, nil, 3500*time.Millisecond)
+			if pErr == nil && pCode == http.StatusOK && len(pBody) > 0 {
+				reProxy := regexp.MustCompile(`(?s)<InputProxyChannel[^>]*>(.*?)</InputProxyChannel>`)
+				pMatches := reProxy.FindAllStringSubmatch(string(pBody), -1)
+				for _, m := range pMatches {
+					block := m[1]
+					idStr := extractXMLTag(block, "id")
+					name := extractXMLTag(block, "name")
+					chNo, _ := strconv.Atoi(idStr)
+					if chNo <= 0 {
+						continue
+					}
+					if seenMain[chNo] {
+						continue
+					}
+					seenMain[chNo] = true
+
+					if name == "" {
+						name = fmt.Sprintf("Камера %d (NVR IP)", chNo)
+					}
+					rtspMain := fmt.Sprintf("rtsp://%s:%s@%s:%d/Streaming/Channels/%d01", user, pass, ip, rtspPort, chNo)
+					rtspSub := fmt.Sprintf("rtsp://%s:%s@%s:%d/Streaming/Channels/%d02", user, pass, ip, rtspPort, chNo)
+
+					foundList = append(foundList, FoundChannel{
+						ID:           fmt.Sprintf("hik-ch-%d", chNo),
+						ChannelNo:    chNo,
+						ChannelIdHik: fmt.Sprintf("%d01", chNo),
+						Name:         name,
+						Enabled:      true,
+						RTSPMain:     rtspMain,
+						RTSPSub:      rtspSub,
+						Codec:        "H.265+",
+						Resolution:   "2560x1440",
+					})
+				}
+			}
+		}
+
+		// Also check Video Inputs (/ISAPI/System/Video/inputs/channels)
+		if len(foundList) <= 1 {
+			inputsURL := fmt.Sprintf("http://%s:%d/ISAPI/System/Video/inputs/channels", ip, port)
+			iCode, _, iBody, iErr := doDigestRequestRaw("GET", inputsURL, user, pass, nil, 3500*time.Millisecond)
+			if iErr == nil && iCode == http.StatusOK && len(iBody) > 0 {
+				reInput := regexp.MustCompile(`(?s)<VideoInputChannel[^>]*>(.*?)</VideoInputChannel>`)
+				iMatches := reInput.FindAllStringSubmatch(string(iBody), -1)
+				for _, m := range iMatches {
+					block := m[1]
+					idStr := extractXMLTag(block, "id")
+					name := extractXMLTag(block, "name")
+					chNo, _ := strconv.Atoi(idStr)
+					if chNo <= 0 {
+						continue
+					}
+					if seenMain[chNo] {
+						continue
+					}
+					seenMain[chNo] = true
+
+					if name == "" {
+						name = fmt.Sprintf("Канал %d", chNo)
+					}
+					rtspMain := fmt.Sprintf("rtsp://%s:%s@%s:%d/Streaming/Channels/%d01", user, pass, ip, rtspPort, chNo)
+					rtspSub := fmt.Sprintf("rtsp://%s:%s@%s:%d/Streaming/Channels/%d02", user, pass, ip, rtspPort, chNo)
+
+					foundList = append(foundList, FoundChannel{
+						ID:           fmt.Sprintf("hik-ch-%d", chNo),
+						ChannelNo:    chNo,
+						ChannelIdHik: fmt.Sprintf("%d01", chNo),
+						Name:         name,
+						Enabled:      true,
+						RTSPMain:     rtspMain,
+						RTSPSub:      rtspSub,
+						Codec:        "H.265+",
+						Resolution:   "2560x1440",
+					})
+				}
+			}
+		}
+
+		// Optional fallbackCount: if caller specifically asked for N channels (e.g. 4, 8, 16)
+		if countParam, _ := strconv.Atoi(r.URL.Query().Get("count")); countParam > 1 && len(foundList) < countParam {
+			for chNo := 1; chNo <= countParam; chNo++ {
+				if seenMain[chNo] {
+					continue
+				}
+				seenMain[chNo] = true
+				rtspMain := fmt.Sprintf("rtsp://%s:%s@%s:%d/Streaming/Channels/%d01", user, pass, ip, rtspPort, chNo)
+				rtspSub := fmt.Sprintf("rtsp://%s:%s@%s:%d/Streaming/Channels/%d02", user, pass, ip, rtspPort, chNo)
+				foundList = append(foundList, FoundChannel{
+					ID:           fmt.Sprintf("hik-ch-%d", chNo),
+					ChannelNo:    chNo,
+					ChannelIdHik: fmt.Sprintf("%d01", chNo),
+					Name:         fmt.Sprintf("Канал %d", chNo),
+					Enabled:      true,
+					RTSPMain:     rtspMain,
+					RTSPSub:      rtspSub,
+					Codec:        "H.265+",
+					Resolution:   "2560x1440",
+				})
+			}
 		}
 
 		sort.Slice(foundList, func(i, j int) bool {

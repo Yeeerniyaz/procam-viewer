@@ -368,24 +368,36 @@ export const VmsVideoCell: React.FC<Props> = ({
             flex: 1,
           }}
         >
-          {/* Channel number pill badge */}
-          <span
-            className="mono"
-            style={{
-              fontSize: '9px',
-              fontWeight: 800,
-              color: '#FFFFFF',
-              background: 'rgba(255, 255, 255, 0.14)',
-              border: '1px solid rgba(255, 255, 255, 0.2)',
-              padding: '1.5px 5px',
-              borderRadius: '4px',
-              letterSpacing: '0.04em',
-              flexShrink: 0,
-            }}
-            title={`Канал №${cell.channelNumber}`}
-          >
-            CH {String(cell.channelNumber || 1).padStart(2, '0')}
-          </span>
+          {/* Channel / Window number badge */}
+          {(() => {
+            const isNvr = cell.deviceType === 'nvr' || (cell.deviceChannelsCount && cell.deviceChannelsCount > 1) || (cell.channelNumber && cell.channelNumber > 1);
+            const badgeText = isNvr
+              ? `CH ${String(cell.channelNumber || 1).padStart(2, '0')}`
+              : `CAM ${String(cellIndex + 1).padStart(2, '0')}`;
+            const badgeTitle = isNvr
+              ? `Канал №${cell.channelNumber || 1} (${cell.deviceName})`
+              : `Окно №${cellIndex + 1} · ${displayName}`;
+
+            return (
+              <span
+                className="mono"
+                style={{
+                  fontSize: '9px',
+                  fontWeight: 800,
+                  color: isNvr ? '#60A5FA' : '#FFFFFF',
+                  background: isNvr ? 'rgba(59, 130, 246, 0.2)' : 'rgba(255, 255, 255, 0.14)',
+                  border: isNvr ? '1px solid rgba(59, 130, 246, 0.4)' : '1px solid rgba(255, 255, 255, 0.2)',
+                  padding: '1.5px 5px',
+                  borderRadius: '4px',
+                  letterSpacing: '0.04em',
+                  flexShrink: 0,
+                }}
+                title={badgeTitle}
+              >
+                {badgeText}
+              </span>
+            );
+          })()}
 
           {/* Status Dot */}
           <span

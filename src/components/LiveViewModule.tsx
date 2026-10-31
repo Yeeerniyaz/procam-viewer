@@ -1620,9 +1620,11 @@ export const LiveViewModule: React.FC<Props> = ({
                                   style={{ width: '5.5px', height: '5.5px', flexShrink: 0 }}
                                   title={dev.status === 'online' ? 'Канал в сети (Онлайн)' : 'Канал недоступен (Офлайн)'}
                                 />
-                                <span className="mono" style={{ fontSize: '10px', color: isPlaying ? 'var(--emerald)' : 'var(--muted)', flexShrink: 0 }}>
-                                  #{ch.channelNumber}
-                                </span>
+                                {dev.channels.length > 1 && (
+                                  <span className="mono" style={{ fontSize: '10px', color: isPlaying ? 'var(--emerald)' : 'var(--muted)', flexShrink: 0 }}>
+                                    #{ch.channelNumber}
+                                  </span>
+                                )}
                                 <span style={{ fontSize: '11px', color: isPlaying ? '#FFFFFF' : '#D4D4D8', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                   {dev.channels.length === 1
                                     ? dev.name

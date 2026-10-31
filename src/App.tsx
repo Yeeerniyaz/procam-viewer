@@ -138,6 +138,7 @@ export const App: React.FC = () => {
 
   // Modals
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
+  const [editingDevice, setEditingDevice] = useState<DeviceItem | null>(null);
   const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
   const [isManualModalOpen, setIsManualModalOpen] = useState<boolean>(false);
 
@@ -223,6 +224,8 @@ export const App: React.FC = () => {
       resolution: channel.resolution || '1920x1080',
       fps: 25,
       bitrateKbps: 3840,
+      deviceType: device.type,
+      deviceChannelsCount: device.channels.length,
       zoomLevel: 1,
       isRecording: false,
       isMuted: true,
@@ -1061,9 +1064,15 @@ export const App: React.FC = () => {
               onOpenAddModal={() => setIsAddModalOpen(true)}
               onOpenExportModal={() => setIsExportModalOpen(true)}
               onDeleteDevice={handleDeleteDevice}
-              onEditDevice={(dev) => setIsAddModalOpen(true)}
+              onEditDevice={(dev) => {
+                setEditingDevice(dev);
+                setIsAddModalOpen(true);
+              }}
               onAddDiscoveredDevices={handleAddDiscoveredDevices}
               onTestPing={handleTestPing}
+              onUpdateDevice={(updatedDev) => {
+                syncDevices(devices.map((d) => (d.id === updatedDev.id ? updatedDev : d)));
+              }}
             />
           )}
 
@@ -1093,8 +1102,15 @@ export const App: React.FC = () => {
         {/* Global Modals */}
         <AddDeviceModal
           isOpen={isAddModalOpen}
-          onClose={() => setIsAddModalOpen(false)}
-          onSaveDevice={handleSaveDevice}
+          onClose={() => {
+            setIsAddModalOpen(false);
+            setEditingDevice(null);
+          }}
+          onSaveDevice={(dev) => {
+            handleSaveDevice(dev);
+            setEditingDevice(null);
+          }}
+          initialDevice={editingDevice}
         />
 
         <ExportConfigModal
