@@ -45,6 +45,9 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
   const [fileSearch, setFileSearch] = useState<string>('');
   const [isLoadingFiles, setIsLoadingFiles] = useState<boolean>(false);
 
+  // Filter only devices that are NVR / have multi-channel recordings
+  const nvrDevices = devices.filter((d) => d.type === 'nvr' || d.channelsCount > 1 || d.channels.length > 1);
+
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     return new Date().toISOString().split('T')[0];
   });
@@ -217,22 +220,27 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   };
 
-  // Initialize with first available channel if none selected
+  // Initialize with first available NVR channel if none selected
   useEffect(() => {
-    if (selectedChannels.length === 0 && devices.length > 0) {
-      const firstDev = devices[0];
+    if (selectedChannels.length === 0 && nvrDevices.length > 0) {
+      const firstDev = nvrDevices[0];
       const firstCh = firstDev.channels[0];
       if (firstCh) {
         setSelectedChannels([{ device: firstDev, channel: firstCh }]);
       }
     }
-  }, [devices]);
+  }, [nvrDevices]);
 
   // Query recorded segments when channel or date changes
   useEffect(() => {
-    if (selectedChannels.length === 0) return;
+    if (selectedChannels.length === 0) {
+      setSegments([]);
+      setIsPlaying(false);
+      return;
+    }
     const target = selectedChannels[0];
     setIsSearching(true);
+    setIsPlaying(false);
 
     fetch(
       `/api/isapi/playback/search?ip=${encodeURIComponent(target.device.ip)}&port=${target.device.httpPort}&user=${encodeURIComponent(target.device.login)}&pass=${encodeURIComponent(target.device.password)}&channel=${target.channel.channelNumber}&date=${selectedDate}`
@@ -241,9 +249,13 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
       .then((data) => {
         if (data.segments && Array.isArray(data.segments)) {
           setSegments(data.segments);
+        } else {
+          setSegments([]);
         }
       })
-      .catch(() => {})
+      .catch(() => {
+        setSegments([]);
+      })
       .finally(() => setIsSearching(false));
   }, [selectedChannels, selectedDate]);
 
@@ -289,7 +301,7 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
 
   // Timeline Click / Scrub
   const handleTimelineClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!timelineRef.current) return;
+    if (!timelineRef.current || segments.length === 0) return;
     const rect = timelineRef.current.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const pct = Math.max(0, Math.min(clickX / rect.width, 1));
@@ -689,50 +701,71 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
                 </span>
               </div>
 
-              {devices.map((dev) => (
-                <div key={dev.id} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', fontWeight: 700, color: '#E4E4E7' }}>
-                    {dev.type === 'nvr' ? <Server size={13} color="#60A5FA" /> : <Video size={13} color="var(--emerald)" />}
-                    <span>{dev.name}</span>
+              {nvrDevices.length === 0 ? (
+                <div style={{ padding: '24px 8px', textAlign: 'center', color: 'var(--muted)', fontSize: '11px', lineHeight: 1.5 }}>
+                  <Server size={32} color="rgba(255, 255, 255, 0.2)" style={{ margin: '0 auto 8px' }} />
+                  <span style={{ fontWeight: 700, color: '#FFFFFF', display: 'block', marginBottom: '6px' }}>
+                    Нет регистраторов NVR
+                  </span>
+                  <div style={{ fontSize: '10.5px', color: '#9CA3AF', marginBottom: '14px' }}>
+                    Ваши камеры — автономные (без встроенных накопителей или SD-карт). Все записи сохраняются напрямую на диск вашего ПК.
                   </div>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', paddingLeft: '16px' }}>
-                    {dev.channels.map((ch) => {
-                      const isChecked = selectedChannels.some(
-                        (c) => c.device.id === dev.id && c.channel.id === ch.id
-                      );
-
-                      return (
-                        <label
-                          key={ch.id}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '6px',
-                            padding: '3px 6px',
-                            borderRadius: '5px',
-                            background: isChecked ? 'rgba(16, 185, 129, 0.12)' : 'transparent',
-                            cursor: 'pointer',
-                            fontSize: '11px',
-                            color: isChecked ? '#FFFFFF' : '#A1A1AA',
-                          }}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={isChecked}
-                            onChange={() => toggleChannelSelect(dev, ch)}
-                            style={{ accentColor: 'var(--emerald)' }}
-                          />
-                          <span className="mono" style={{ fontSize: '10px', color: isChecked ? 'var(--emerald)' : 'var(--muted)' }}>
-                            #{ch.channelNumber}
-                          </span>
-                          <span>{ch.name}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('local')}
+                    className="btn-pill btn-pill-primary"
+                    style={{ width: '100%', padding: '7px 10px', fontSize: '11px', justifyContent: 'center', gap: '6px' }}
+                  >
+                    <HardDrive size={13} />
+                    <span>Открыть записи на диске</span>
+                  </button>
                 </div>
-              ))}
+              ) : (
+                nvrDevices.map((dev) => (
+                  <div key={dev.id} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', fontWeight: 700, color: '#E4E4E7' }}>
+                      <Server size={13} color="#60A5FA" />
+                      <span>{dev.name}</span>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', paddingLeft: '16px' }}>
+                      {dev.channels.map((ch) => {
+                        const isChecked = selectedChannels.some(
+                          (c) => c.device.id === dev.id && c.channel.id === ch.id
+                        );
+
+                        return (
+                          <label
+                            key={ch.id}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              padding: '3px 6px',
+                              borderRadius: '5px',
+                              background: isChecked ? 'rgba(16, 185, 129, 0.12)' : 'transparent',
+                              cursor: 'pointer',
+                              fontSize: '11px',
+                              color: isChecked ? '#FFFFFF' : '#A1A1AA',
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => toggleChannelSelect(dev, ch)}
+                              style={{ accentColor: 'var(--emerald)' }}
+                            />
+                            <span className="mono" style={{ fontSize: '10px', color: isChecked ? 'var(--emerald)' : 'var(--muted)' }}>
+                              #{ch.channelNumber}
+                            </span>
+                            <span>{ch.name}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
 
             {/* Legend */}
@@ -974,132 +1007,234 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
             </div>
           </div>
         ) : (
-          <>
-            {/* Synchronous Playback Video Grid */}
+          nvrDevices.length === 0 ? (
             <div
-          style={{
-            flex: 1,
-            display: 'grid',
-            gridTemplateColumns:
-              playbackLayout === '1x1'
-                ? '1fr'
-                : playbackLayout === '2x2'
-                ? 'repeat(2, 1fr)'
-                : 'repeat(3, 1fr)',
-            gridTemplateRows:
-              playbackLayout === '1x1'
-                ? '1fr'
-                : playbackLayout === '2x2'
-                ? 'repeat(2, 1fr)'
-                : 'repeat(3, 1fr)',
-            gap: '1px',
-            background: '#000000',
-            padding: '1px',
-            minHeight: 0,
-          }}
-        >
-          {Array.from({ length: playbackCapacity }).map((_, idx) => {
-            const item = visiblePlayback[idx];
-
-            if (!item) {
-              return (
-                <div
-                  key={idx}
-                  style={{
-                    background: '#07090e',
-                    border: '1px solid rgba(255, 255, 255, 0.05)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: 'rgba(255, 255, 255, 0.25)',
-                    fontSize: '11px',
-                  }}
-                >
-                  <span className="mono">КАНАЛ ВОСПРОИЗВЕДЕНИЯ #{idx + 1}</span>
-                  <span>Выберите канал в дереве слева</span>
-                </div>
-              );
-            }
-
-            // RTSP Track URL format for Hikvision ISAPI Playback
-            const startIso = `${selectedDate.replace(/-/g, '')}T${formatTime(currentSeconds).replace(/:/g, '')}Z`;
-            const endIso = `${selectedDate.replace(/-/g, '')}T235959Z`;
-            const trackURL = `rtsp://${item.device.login}:${item.device.password}@${item.device.ip}:${item.device.rtspPort}/Streaming/tracks/${item.channel.channelNumber}01?starttime=${startIso}&endtime=${endIso}`;
-
-            return (
+              style={{
+                flex: 1,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '40px 24px',
+                background: '#0a0d14',
+                textAlign: 'center',
+              }}
+            >
               <div
-                key={idx}
                 style={{
-                  position: 'relative',
-                  background: '#040507',
-                  border: '1px solid rgba(255, 255, 255, 0.06)',
-                  overflow: 'hidden',
+                  width: '64px',
+                  height: '64px',
+                  borderRadius: '16px',
+                  background: 'rgba(59, 130, 246, 0.12)',
+                  border: '1px solid rgba(59, 130, 246, 0.3)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
+                  marginBottom: '16px',
                 }}
               >
-                {/* Live/Playback frame snapshot */}
-                <img
-                  src={`/api/isapi/picture?ip=${encodeURIComponent(item.device.ip)}&port=${item.device.httpPort}&user=${encodeURIComponent(item.device.login)}&pass=${encodeURIComponent(item.device.password)}&channel=${item.channel.channelIdHik}&t=${Math.floor(currentSeconds / 2)}`}
-                  alt={item.channel.name}
-                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                />
+                <Server size={32} color="#60A5FA" />
+              </div>
 
-                {/* Top Info Header */}
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    padding: '6px 10px',
-                    background: 'linear-gradient(to bottom, rgba(7, 9, 14, 0.9) 0%, rgba(7, 9, 14, 0) 100%)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span className="status-dot online" style={{ width: '6px', height: '6px' }} />
-                    <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#FFFFFF' }}>
-                      {item.device.channels.length === 1
-                        ? item.device.name
-                        : /^(основной поток|субпоток|profile|stream)/i.test(item.channel.name)
-                        ? `${item.device.name} · Канал ${item.channel.channelNumber}`
-                        : `${item.device.name} · ${item.channel.name.replace(/^Канал \d+:\s*/, '')}`}
-                    </span>
-                    <span className="mono" style={{ fontSize: '9px', color: 'var(--muted)' }}>
-                      ({item.device.ip})
-                    </span>
-                  </div>
+              <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#FFFFFF', marginBottom: '8px' }}>
+                Архив NVR активен при наличии сетевого видеорегистратора
+              </h3>
 
-                  <div className="mono" style={{ fontSize: '11px', fontWeight: 800, color: 'var(--emerald)' }}>
-                    {selectedDate} {formatTime(currentSeconds)}
+              <p style={{ maxWidth: '520px', fontSize: '12.5px', color: '#9CA3AF', lineHeight: 1.6, marginBottom: '20px' }}>
+                В вашей системе сейчас подключены <strong>автономные IP-камеры</strong> (без встроенных карт памяти).
+                У них нет встроенного накопителя, поэтому весь архив ведется <strong>напрямую на жестком диске вашего ПК</strong>.
+              </p>
+
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '10px',
+                  maxWidth: '480px',
+                  width: '100%',
+                  background: '#0e121a',
+                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  borderRadius: '12px',
+                  padding: '16px 20px',
+                  textAlign: 'left',
+                  marginBottom: '24px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', fontSize: '12px', color: '#E4E4E7' }}>
+                  <HardDrive size={16} color="var(--emerald)" style={{ flexShrink: 0, marginTop: '2px' }} />
+                  <div>
+                    <strong style={{ color: '#FFFFFF' }}>Локальная запись на ПК:</strong> в Живом виде нажмите красную кнопку <strong>● REC</strong> на камере (или кнопку <strong>● REC Все</strong>), и видео сохранится на диск в MP4.
                   </div>
                 </div>
-
-                {/* OSD Watermark */}
-                <div
-                  className="mono"
-                  style={{
-                    position: 'absolute',
-                    bottom: '8px',
-                    left: '10px',
-                    fontSize: '11px',
-                    color: 'rgba(255, 255, 255, 0.85)',
-                    background: 'rgba(0, 0, 0, 0.6)',
-                    padding: '2px 6px',
-                    borderRadius: '4px',
-                  }}
-                >
-                  АРХИВ NVR · {playbackSpeed}x
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', fontSize: '12px', color: '#E4E4E7' }}>
+                  <Film size={16} color="#60A5FA" style={{ flexShrink: 0, marginTop: '2px' }} />
+                  <div>
+                    <strong style={{ color: '#FFFFFF' }}>Настоящий видеоплеер:</strong> во вкладке <strong>«Записи на диске»</strong> работает реальный плеер с перемоткой, звуком, пакетным скачиванием в ZIP и открытием папки.
+                  </div>
                 </div>
               </div>
-            );
-          })}
-        </div>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab('local')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '10px 22px',
+                  borderRadius: '8px',
+                  background: 'var(--emerald)',
+                  border: 'none',
+                  color: '#000000',
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  boxShadow: '0 4px 14px rgba(16, 185, 129, 0.3)',
+                }}
+              >
+                <HardDrive size={16} />
+                <span>Перейти в «Записи на диске»</span>
+              </button>
+            </div>
+          ) : (
+            <>
+              {/* Synchronous Playback Video Grid */}
+              <div
+                style={{
+                  flex: 1,
+                  display: 'grid',
+                  gridTemplateColumns:
+                    playbackLayout === '1x1'
+                      ? '1fr'
+                      : playbackLayout === '2x2'
+                      ? 'repeat(2, 1fr)'
+                      : 'repeat(3, 1fr)',
+                  gridTemplateRows:
+                    playbackLayout === '1x1'
+                      ? '1fr'
+                      : playbackLayout === '2x2'
+                      ? 'repeat(2, 1fr)'
+                      : 'repeat(3, 1fr)',
+                  gap: '1px',
+                  background: '#000000',
+                  padding: '1px',
+                  minHeight: 0,
+                }}
+              >
+                {Array.from({ length: playbackCapacity }).map((_, idx) => {
+                  const item = visiblePlayback[idx];
+
+                  if (!item) {
+                    return (
+                      <div
+                        key={idx}
+                        style={{
+                          background: '#07090e',
+                          border: '1px solid rgba(255, 255, 255, 0.05)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          color: 'rgba(255, 255, 255, 0.25)',
+                          fontSize: '11px',
+                        }}
+                      >
+                        <span className="mono">КАНАЛ ВОСПРОИЗВЕДЕНИЯ #{idx + 1}</span>
+                        <span>Выберите канал в дереве слева</span>
+                      </div>
+                    );
+                  }
+
+                  // RTSP Track URL format for Hikvision ISAPI Playback
+                  const startIso = `${selectedDate.replace(/-/g, '')}T${formatTime(currentSeconds).replace(/:/g, '')}Z`;
+                  const endIso = `${selectedDate.replace(/-/g, '')}T235959Z`;
+                  const trackURL = `rtsp://${item.device.login}:${item.device.password}@${item.device.ip}:${item.device.rtspPort}/Streaming/tracks/${item.channel.channelNumber}01?starttime=${startIso}&endtime=${endIso}`;
+
+                  return (
+                    <div
+                      key={idx}
+                      style={{
+                        position: 'relative',
+                        background: '#040507',
+                        border: '1px solid rgba(255, 255, 255, 0.06)',
+                        overflow: 'hidden',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      {/* Show message when no segments exist in NVR archive */}
+                      {segments.length === 0 ? (
+                        <div style={{ textAlign: 'center', padding: '24px', color: 'rgba(255, 255, 255, 0.4)' }}>
+                          <CalendarIcon size={38} color="rgba(255, 255, 255, 0.2)" style={{ margin: '0 auto 10px' }} />
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: '#E4E4E7', marginBottom: '4px' }}>
+                            Нет записей в архиве NVR
+                          </div>
+                          <div style={{ fontSize: '11px', color: '#71717A', maxWidth: '320px', lineHeight: 1.5 }}>
+                            На канале #{item.channel.channelNumber} устройства {item.device.name} нет сохраненных записей за {selectedDate}.
+                          </div>
+                        </div>
+                      ) : (
+                        <img
+                          src={`/api/isapi/picture?ip=${encodeURIComponent(item.device.ip)}&port=${item.device.httpPort}&user=${encodeURIComponent(item.device.login)}&pass=${encodeURIComponent(item.device.password)}&channel=${item.channel.channelIdHik}&t=${Math.floor(currentSeconds / 2)}`}
+                          alt={item.channel.name}
+                          style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                        />
+                      )}
+
+                      {/* Top Info Header */}
+                      <div
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          padding: '6px 10px',
+                          background: 'linear-gradient(to bottom, rgba(7, 9, 14, 0.9) 0%, rgba(7, 9, 14, 0) 100%)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span className="status-dot online" style={{ width: '6px', height: '6px' }} />
+                          <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#FFFFFF' }}>
+                            {item.device.channels.length === 1
+                              ? item.device.name
+                              : /^(основной поток|субпоток|profile|stream)/i.test(item.channel.name)
+                              ? `${item.device.name} · Канал ${item.channel.channelNumber}`
+                              : `${item.device.name} · ${item.channel.name.replace(/^Канал \d+:\s*/, '')}`}
+                          </span>
+                          <span className="mono" style={{ fontSize: '9px', color: 'var(--muted)' }}>
+                            ({item.device.ip})
+                          </span>
+                        </div>
+
+                        <div className="mono" style={{ fontSize: '11px', fontWeight: 800, color: 'var(--emerald)' }}>
+                          {selectedDate} {formatTime(currentSeconds)}
+                        </div>
+                      </div>
+
+                      {/* OSD Watermark */}
+                      <div
+                        className="mono"
+                        style={{
+                          position: 'absolute',
+                          bottom: '8px',
+                          left: '10px',
+                          fontSize: '11px',
+                          color: 'rgba(255, 255, 255, 0.85)',
+                          background: 'rgba(0, 0, 0, 0.6)',
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                        }}
+                      >
+                        АРХИВ NVR · {playbackSpeed}x
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
 
         {/* 3. Interactive 24-Hour Timeline Scrubber & Control Bar */}
         <div
@@ -1140,11 +1275,22 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
               <button
                 type="button"
                 className="btn-pill btn-pill-primary"
-                style={{ padding: '5px 12px' }}
-                onClick={() => setIsPlaying(!isPlaying)}
+                style={{
+                  padding: '5px 12px',
+                  opacity: segments.length === 0 ? 0.6 : 1,
+                  cursor: segments.length === 0 ? 'not-allowed' : 'pointer',
+                }}
+                onClick={() => {
+                  if (segments.length === 0) {
+                    alert(`В архиве NVR нет сохраненных записей за ${selectedDate}.`);
+                    return;
+                  }
+                  setIsPlaying(!isPlaying);
+                }}
+                title={segments.length === 0 ? 'В архиве регистратора нет записей за эту дату' : isPlaying ? 'Пауза' : 'Воспроизведение'}
               >
                 {isPlaying ? <Pause size={13} /> : <Play size={13} />}
-                {isPlaying ? 'Пауза' : 'Воспроизведение'}
+                {isPlaying ? 'Пауза' : segments.length === 0 ? 'Нет записей' : 'Воспроизведение'}
               </button>
 
               <button
@@ -1279,7 +1425,7 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
               flex: 1,
               position: 'relative',
               background: '#07090e',
-              cursor: 'pointer',
+              cursor: segments.length === 0 ? 'default' : 'pointer',
               display: 'flex',
               flexDirection: 'column',
               justifyContent: 'flex-end',
@@ -1296,31 +1442,40 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
                 borderRadius: '4px',
                 overflow: 'hidden',
                 marginBottom: '4px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
               }}
             >
-              {segments.map((seg, idx) => {
-                const leftPct = (seg.startSec / 86400) * 100;
-                const widthPct = Math.max(((seg.endSec - seg.startSec) / 86400) * 100, 0.4);
-                let color = '#3B82F6'; // continuous blue
-                if (seg.type === 'motion') color = '#F59E0B'; // motion yellow
-                else if (seg.type === 'alarm') color = '#EF4444'; // alarm red
+              {segments.length === 0 ? (
+                <span style={{ fontSize: '10.5px', color: '#71717A', letterSpacing: '0.02em', userSelect: 'none' }}>
+                  Шкала пуста — в архиве NVR нет записей за {selectedDate}
+                </span>
+              ) : (
+                segments.map((seg, idx) => {
+                  const leftPct = (seg.startSec / 86400) * 100;
+                  const widthPct = Math.max(((seg.endSec - seg.startSec) / 86400) * 100, 0.4);
+                  let color = '#3B82F6'; // continuous blue
+                  if (seg.type === 'motion') color = '#F59E0B'; // motion yellow
+                  else if (seg.type === 'alarm') color = '#EF4444'; // alarm red
 
-                return (
-                  <div
-                    key={idx}
-                    style={{
-                      position: 'absolute',
-                      left: `${leftPct}%`,
-                      width: `${widthPct}%`,
-                      top: 0,
-                      bottom: 0,
-                      background: color,
-                      opacity: 0.85,
-                    }}
-                    title={`${seg.type.toUpperCase()}: ${seg.startTime} — ${seg.endTime}`}
-                  />
-                );
-              })}
+                  return (
+                    <div
+                      key={idx}
+                      style={{
+                        position: 'absolute',
+                        left: `${leftPct}%`,
+                        width: `${widthPct}%`,
+                        top: 0,
+                        bottom: 0,
+                        background: color,
+                        opacity: 0.85,
+                      }}
+                      title={`${seg.type.toUpperCase()}: ${seg.startTime} — ${seg.endTime}`}
+                    />
+                  );
+                })
+              )}
             </div>
 
             {/* Time ruler ticks (00:00 to 24:00) */}
@@ -1349,38 +1504,41 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
             </div>
 
             {/* Playhead Needle (Curved red indicator) */}
-            <div
-              style={{
-                position: 'absolute',
-                left: `${(currentSeconds / 86400) * 100}%`,
-                top: 0,
-                bottom: 0,
-                width: '2px',
-                background: '#EF4444',
-                boxShadow: '0 0 8px #EF4444',
-                pointerEvents: 'none',
-                transform: 'translateX(-50%)',
-                zIndex: 20,
-              }}
-            >
+            {segments.length > 0 && (
               <div
                 style={{
                   position: 'absolute',
-                  top: '-4px',
-                  left: '50%',
-                  transform: 'translateX(-50%)',
-                  width: '8px',
-                  height: '8px',
+                  left: `${(currentSeconds / 86400) * 100}%`,
+                  top: 0,
+                  bottom: 0,
+                  width: '2px',
                   background: '#EF4444',
-                  borderRadius: '50%',
+                  boxShadow: '0 0 8px #EF4444',
+                  pointerEvents: 'none',
+                  transform: 'translateX(-50%)',
+                  zIndex: 20,
                 }}
-              />
-            </div>
+              >
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: '-4px',
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    width: '8px',
+                    height: '8px',
+                    background: '#EF4444',
+                    borderRadius: '50%',
+                  }}
+                />
+              </div>
+            )}
           </div>
         </div>
-          </>
-        )}
-      </div>
+      </>
+    )
+  )}
+</div>
 
       {/* NVR Archive Multi-Channel & Custom Time Range Export Modal */}
       <ExportArchiveModal
