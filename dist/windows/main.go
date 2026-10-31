@@ -559,6 +559,28 @@ func pingHost(ip string) (float64, []int) {
 	return 0.0, nil
 }
 
+// findFFmpegPath locates ffmpeg in system PATH or next to the executable (portable mode)
+func findFFmpegPath() (string, error) {
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		local := filepath.Join(dir, "ffmpeg")
+		if runtime.GOOS == "windows" {
+			local = filepath.Join(dir, "ffmpeg.exe")
+		}
+		if _, err := os.Stat(local); err == nil {
+			return local, nil
+		}
+		localBin := filepath.Join(dir, "bin", "ffmpeg")
+		if runtime.GOOS == "windows" {
+			localBin = filepath.Join(dir, "bin", "ffmpeg.exe")
+		}
+		if _, err := os.Stat(localBin); err == nil {
+			return localBin, nil
+		}
+	}
+	return exec.LookPath("ffmpeg")
+}
+
 // streamRTSPMJPEG streams live video from an RTSP stream directly to browser using FFmpeg MJPEG pipe
 func streamRTSPMJPEG(w http.ResponseWriter, r *http.Request, rtspURL string) {
 	flusher, ok := w.(http.Flusher)
@@ -566,7 +588,7 @@ func streamRTSPMJPEG(w http.ResponseWriter, r *http.Request, rtspURL string) {
 		http.Error(w, "Streaming unsupported", 500)
 		return
 	}
-	ffmpegPath, err := exec.LookPath("ffmpeg")
+	ffmpegPath, err := findFFmpegPath()
 	if err != nil {
 		http.Error(w, "FFmpeg не найден на сервере", 501)
 		return
@@ -1271,7 +1293,7 @@ func main() {
 			delete(activeRecordings, cellID)
 		}
 
-		ffmpegPath, err := exec.LookPath("ffmpeg")
+		ffmpegPath, err := findFFmpegPath()
 		if err != nil {
 			http.Error(w, "FFmpeg не найден на сервере для записи", 500)
 			return
@@ -2161,7 +2183,7 @@ func main() {
 		rtspTrack := fmt.Sprintf("rtsp://%s:%s@%s:554/Streaming/tracks/%s01?starttime=%s&endtime=%s",
 			user, pass, ip, channel, normStart, normEnd)
 
-		ffmpegPath, err := exec.LookPath("ffmpeg")
+		ffmpegPath, err := findFFmpegPath()
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(500)
