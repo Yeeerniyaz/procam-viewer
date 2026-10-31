@@ -18,9 +18,13 @@ import {
   Maximize2,
   HardDrive,
   FolderOpen,
+  Folder,
   Film,
   RefreshCw,
+  CheckSquare,
+  Trash2,
 } from 'lucide-react';
+import { ExportArchiveModal } from './ExportArchiveModal';
 
 interface LocalRecordFile {
   filename: string;
@@ -54,9 +58,93 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const [isExporting, setIsExporting] = useState<boolean>(false);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
+  const [selectedFileNames, setSelectedFileNames] = useState<string[]>([]);
+  const [recordingsDir, setRecordingsDir] = useState<string>('~/Videos/ProCam_Recordings');
+  const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
+  const [isDeletingFiles, setIsDeletingFiles] = useState<boolean>(false);
 
   const timelineRef = useRef<HTMLDivElement>(null);
   const [isDraggingTimeline, setIsDraggingTimeline] = useState<boolean>(false);
+
+  // Fetch current recordings directory from backend
+  const fetchRecordingsDir = async () => {
+    try {
+      const res = await fetch('/api/record/dir');
+      if (res.ok) {
+        const d = await res.json();
+        if (d && d.dir) {
+          setRecordingsDir(d.dir);
+        }
+      }
+    } catch (e) {}
+  };
+
+  // Open native GUI folder chooser dialog on host OS
+  const handleSelectFolder = async () => {
+    try {
+      const res = await fetch('/api/record/select-folder', { method: 'POST' });
+      if (res.ok) {
+        const d = await res.json();
+        if (d.success && d.dir) {
+          setRecordingsDir(d.dir);
+          fetchLocalFiles();
+        }
+      }
+    } catch (e) {}
+  };
+
+  // Toggle selection of a local recording file for batch actions
+  const toggleSelectFileName = (filename: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setSelectedFileNames((prev) =>
+      prev.includes(filename) ? prev.filter((f) => f !== filename) : [...prev, filename]
+    );
+  };
+
+  // Select or deselect all local recordings
+  const toggleSelectAllLocal = () => {
+    if (selectedFileNames.length === localFiles.length && localFiles.length > 0) {
+      setSelectedFileNames([]);
+    } else {
+      setSelectedFileNames(localFiles.map((f) => f.filename));
+    }
+  };
+
+  // Download all selected files as a single ZIP archive
+  const handleDownloadSelectedZip = () => {
+    if (selectedFileNames.length === 0) return;
+    const param = encodeURIComponent(selectedFileNames.join(','));
+    const a = document.createElement('a');
+    a.href = `/api/record/download-zip?files=${param}`;
+    a.download = `procam_export_${Date.now()}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  // Delete selected files from disk
+  const handleDeleteSelected = async () => {
+    if (selectedFileNames.length === 0) return;
+    if (!window.confirm(`Удалить выбранные файлы (${selectedFileNames.length} шт.) с диска безвозвратно?`)) {
+      return;
+    }
+    setIsDeletingFiles(true);
+    try {
+      const res = await fetch('/api/record/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files: selectedFileNames }),
+      });
+      if (res.ok) {
+        if (selectedFile && selectedFileNames.includes(selectedFile.filename)) {
+          setSelectedFile(null);
+        }
+        setSelectedFileNames([]);
+        fetchLocalFiles();
+      }
+    } catch (e) {}
+    setIsDeletingFiles(false);
+  };
 
   // Export NVR segment to MP4 via backend
   const handleExportNvrSegment = async () => {
@@ -100,6 +188,9 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
         const data = await res.json();
         if (data && Array.isArray(data.files)) {
           setLocalFiles(data.files);
+          if (data.dir) {
+            setRecordingsDir(data.dir);
+          }
           if (data.files.length > 0 && !selectedFile) {
             setSelectedFile(data.files[0]);
           }
@@ -111,6 +202,7 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
 
   useEffect(() => {
     fetchLocalFiles();
+    fetchRecordingsDir();
   }, []);
 
   const handleOpenRecordingsFolder = () => {
@@ -286,7 +378,7 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
         {/* Tab 1: Local Recordings List */}
         {activeTab === 'local' ? (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-            {/* Header with Open Folder & Refresh */}
+            {/* Header with Open Folder & Choose Directory & Refresh */}
             <div
               style={{
                 padding: '8px 10px',
@@ -303,10 +395,20 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
               <div style={{ display: 'flex', gap: '4px' }}>
                 <button
                   type="button"
+                  onClick={handleSelectFolder}
+                  className="btn-pill"
+                  style={{ padding: '3px 7px', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  title="Выбрать другую папку для сохранения (через системный диалог)"
+                >
+                  <Folder size={12} color="var(--emerald)" />
+                  <span>Обзор...</span>
+                </button>
+                <button
+                  type="button"
                   onClick={handleOpenRecordingsFolder}
                   className="btn-pill"
                   style={{ padding: '3px 7px', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '4px' }}
-                  title="Открыть папку с видео в проводнике Linux"
+                  title="Открыть текущую папку в проводнике"
                 >
                   <FolderOpen size={12} />
                   <span>Папка</span>
@@ -323,11 +425,115 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
               </div>
             </div>
 
+            {/* Folder path info */}
+            <div
+              style={{
+                padding: '4px 10px',
+                fontSize: '9.5px',
+                color: 'rgba(255, 255, 255, 0.45)',
+                borderBottom: '1px solid rgba(255, 255, 255, 0.04)',
+                background: 'rgba(0, 0, 0, 0.25)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+              title={recordingsDir}
+            >
+              <Folder size={11} color="rgba(255, 255, 255, 0.3)" style={{ flexShrink: 0 }} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'monospace' }}>
+                {recordingsDir}
+              </span>
+            </div>
+
+            {/* Multi-selection Toolbar */}
+            <div
+              style={{
+                padding: '5px 8px',
+                borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+                background: selectedFileNames.length > 0 ? 'rgba(16, 185, 129, 0.08)' : 'rgba(255, 255, 255, 0.02)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '6px',
+              }}
+            >
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  cursor: 'pointer',
+                  fontSize: '11px',
+                  color: selectedFileNames.length > 0 ? 'var(--emerald)' : 'var(--muted)',
+                  userSelect: 'none',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={localFiles.length > 0 && selectedFileNames.length === localFiles.length}
+                  onChange={toggleSelectAllLocal}
+                  style={{ accentColor: 'var(--emerald)', cursor: 'pointer' }}
+                />
+                <span style={{ fontWeight: 600 }}>
+                  {selectedFileNames.length > 0
+                    ? `Выбрано: ${selectedFileNames.length}`
+                    : 'Выбрать все'}
+                </span>
+              </label>
+
+              {selectedFileNames.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <button
+                    type="button"
+                    onClick={handleDownloadSelectedZip}
+                    className="btn-pill"
+                    style={{
+                      padding: '2px 7px',
+                      fontSize: '10px',
+                      background: 'rgba(16, 185, 129, 0.2)',
+                      color: 'var(--emerald)',
+                      border: '1px solid var(--emerald-border)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                    }}
+                    title="Скачать выбранные файлы единым ZIP архивом"
+                  >
+                    <Download size={11} />
+                    <span>ZIP</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDeleteSelected}
+                    disabled={isDeletingFiles}
+                    className="btn-pill"
+                    style={{
+                      padding: '2px 7px',
+                      fontSize: '10px',
+                      background: 'rgba(239, 68, 68, 0.2)',
+                      color: '#EF4444',
+                      border: '1px solid rgba(239, 68, 68, 0.3)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                    }}
+                    title="Удалить выбранные файлы с диска"
+                  >
+                    <Trash2 size={11} />
+                    <span>Удалить</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
             {/* Filter Input */}
             <div style={{ padding: '6px 8px', borderBottom: '1px solid rgba(255, 255, 255, 0.05)' }}>
               <input
                 type="text"
-                placeholder="Фильтр записей..."
+                placeholder="Поиск по имени файла..."
                 value={fileSearch}
                 onChange={(e) => setFileSearch(e.target.value)}
                 style={{
@@ -358,6 +564,7 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
                   .filter((f) => !fileSearch || f.filename.toLowerCase().includes(fileSearch.toLowerCase()))
                   .map((f) => {
                     const isCur = selectedFile?.filename === f.filename;
+                    const isChecked = selectedFileNames.includes(f.filename);
                     return (
                       <div
                         key={f.filename}
@@ -365,36 +572,53 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
                         style={{
                           padding: '6px 8px',
                           borderRadius: '6px',
-                          background: isCur ? 'rgba(16, 185, 129, 0.14)' : 'rgba(255, 255, 255, 0.02)',
-                          border: isCur ? '1px solid var(--emerald-border)' : '1px solid rgba(255, 255, 255, 0.05)',
+                          background: isCur
+                            ? 'rgba(16, 185, 129, 0.14)'
+                            : isChecked
+                            ? 'rgba(59, 130, 246, 0.1)'
+                            : 'rgba(255, 255, 255, 0.02)',
+                          border: isCur
+                            ? '1px solid var(--emerald-border)'
+                            : isChecked
+                            ? '1px solid rgba(59, 130, 246, 0.35)'
+                            : '1px solid rgba(255, 255, 255, 0.05)',
                           cursor: 'pointer',
                           display: 'flex',
-                          flexDirection: 'column',
-                          gap: '2px',
+                          alignItems: 'center',
+                          gap: '8px',
                           transition: 'all 0.1s ease',
                         }}
                       >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', overflow: 'hidden' }}>
-                          <Film size={12} color={isCur ? 'var(--emerald)' : 'var(--muted)'} />
-                          <span
-                            style={{
-                              fontSize: '11px',
-                              fontWeight: 600,
-                              color: isCur ? '#FFFFFF' : '#D4D4D8',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                              flex: 1,
-                            }}
-                          >
-                            {f.filename}
-                          </span>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '9.5px', color: 'var(--muted)' }}>
-                          <span className="mono">{f.date}</span>
-                          <span className="mono" style={{ color: 'var(--emerald)' }}>
-                            {formatFileSize(f.size)}
-                          </span>
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(e) => toggleSelectFileName(f.filename, e as any)}
+                          onClick={(e) => e.stopPropagation()}
+                          style={{ accentColor: 'var(--emerald)', cursor: 'pointer' }}
+                        />
+                        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', overflow: 'hidden' }}>
+                            <Film size={12} color={isCur ? 'var(--emerald)' : 'var(--muted)'} style={{ flexShrink: 0 }} />
+                            <span
+                              style={{
+                                fontSize: '11px',
+                                fontWeight: 600,
+                                color: isCur ? '#FFFFFF' : '#D4D4D8',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                              title={f.filename}
+                            >
+                              {f.filename}
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '9.5px', color: 'var(--muted)' }}>
+                            <span className="mono">{f.date}</span>
+                            <span className="mono" style={{ color: 'var(--emerald)' }}>
+                              {formatFileSize(f.size)}
+                            </span>
+                          </div>
                         </div>
                       </div>
                     );
@@ -424,8 +648,34 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
                   color: '#FFFFFF',
                   fontSize: '12px',
                   fontWeight: 700,
+                  marginBottom: '8px',
                 }}
               />
+
+              <button
+                type="button"
+                onClick={() => setIsExportModalOpen(true)}
+                style={{
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  padding: '6px 10px',
+                  borderRadius: '6px',
+                  background: 'rgba(16, 185, 129, 0.15)',
+                  border: '1px solid var(--emerald-border)',
+                  color: '#10B981',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  transition: 'background 0.15s ease',
+                }}
+                title="Экспорт архива по времени и нескольким каналам"
+              >
+                <Download size={13} />
+                <span>Мастер экспорта архива</span>
+              </button>
             </div>
 
             {/* Synchronous Channel Selector Tree */}
@@ -561,6 +811,49 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                {selectedFileNames.length > 0 && (
+                  <button
+                    onClick={handleDownloadSelectedZip}
+                    title="Скачать выбранные файлы единым ZIP архивом"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '6px 12px',
+                      fontSize: '12px',
+                      borderRadius: '5px',
+                      background: 'rgba(16, 185, 129, 0.2)',
+                      border: '1px solid var(--emerald-border)',
+                      color: 'var(--emerald)',
+                      cursor: 'pointer',
+                      fontWeight: 600,
+                    }}
+                  >
+                    <Download size={14} />
+                    <span>Скачать ZIP ({selectedFileNames.length})</span>
+                  </button>
+                )}
+
+                <button
+                  onClick={handleSelectFolder}
+                  title="Выбрать другую папку для сохранения записей"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 12px',
+                    fontSize: '12px',
+                    borderRadius: '5px',
+                    background: '#1F2937',
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                    color: '#E5E7EB',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <Folder size={14} color="var(--emerald)" />
+                  <span>Выбрать папку</span>
+                </button>
+
                 <button
                   onClick={handleOpenRecordingsFolder}
                   title="Открыть папку с записями в файловом менеджере"
@@ -651,7 +944,7 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
             {/* Footer Status */}
             <div
               style={{
-                height: '32px',
+                height: '36px',
                 background: '#0c0f17',
                 borderTop: '1px solid rgba(255, 255, 255, 0.06)',
                 display: 'flex',
@@ -662,8 +955,18 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
                 color: 'rgba(255, 255, 255, 0.45)',
               }}
             >
-              <div>
-                Каталог архива: <span style={{ color: '#9CA3AF', fontFamily: 'monospace' }}>~/Videos/ProCam_Recordings</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span>Каталог архива:</span>
+                <span style={{ color: '#E4E4E7', fontFamily: 'monospace', fontWeight: 600 }}>{recordingsDir}</span>
+                <button
+                  type="button"
+                  onClick={handleSelectFolder}
+                  className="btn-pill"
+                  style={{ padding: '2px 8px', fontSize: '10.5px', color: 'var(--emerald)' }}
+                  title="Изменить папку для сохранения записей"
+                >
+                  Сменить папку...
+                </button>
               </div>
               <div>
                 Формат: <span style={{ color: '#60A5FA' }}>H.264 / H.265 MP4 (Lossless StreamCopy)</span>
@@ -886,8 +1189,8 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
             </div>
 
             {/* Current Playback Timestamp & Export Button */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginRight: '4px' }}>
                 <Clock size={13} color="var(--emerald)" />
                 <span className="mono" style={{ fontSize: '13px', fontWeight: 800, color: '#FFFFFF', letterSpacing: '0.6px' }}>
                   {selectedDate} {formatTime(currentSeconds)}
@@ -897,9 +1200,31 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
               <button
                 type="button"
                 className="btn-pill"
+                onClick={() => setIsExportModalOpen(true)}
+                title="Экспорт архива по времени и нескольким каналам в MP4"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  padding: '3px 10px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  background: 'rgba(16, 185, 129, 0.2)',
+                  color: 'var(--emerald)',
+                  border: '1px solid var(--emerald-border)',
+                  cursor: 'pointer',
+                }}
+              >
+                <Download size={12} />
+                <span>Экспорт архива...</span>
+              </button>
+
+              <button
+                type="button"
+                className="btn-pill"
                 onClick={handleExportNvrSegment}
                 disabled={isExporting}
-                title="Скачать отрезок архива ±5 мин в локальное хранилище MP4"
+                title="Быстрый экспорт отрезка архива ±5 мин в локальное хранилище MP4"
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -913,7 +1238,7 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
                 }}
               >
                 <Download size={12} />
-                <span>{isExporting ? 'Экспорт...' : 'Скачать отрезок'}</span>
+                <span>{isExporting ? 'Экспорт...' : 'Отрезок (10 мин)'}</span>
               </button>
 
               {exportNotice && (
@@ -1056,6 +1381,21 @@ export const PlaybackModule: React.FC<Props> = ({ devices }) => {
           </>
         )}
       </div>
+
+      {/* NVR Archive Multi-Channel & Custom Time Range Export Modal */}
+      <ExportArchiveModal
+        isOpen={isExportModalOpen}
+        onClose={() => setIsExportModalOpen(false)}
+        devices={devices}
+        selectedDate={selectedDate}
+        currentSeconds={currentSeconds}
+        initialChannels={selectedChannels}
+        onExportSuccess={(msg) => {
+          setExportNotice(msg);
+          fetchLocalFiles();
+          setTimeout(() => setExportNotice(null), 6000);
+        }}
+      />
     </div>
   );
 };

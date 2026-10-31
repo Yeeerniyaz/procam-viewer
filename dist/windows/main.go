@@ -85,14 +85,23 @@ type NetInterfaceInfo struct {
 }
 
 var (
-	stateMu          sync.Mutex
-	serverPort       int
-	recordingsMu     sync.Mutex
-	activeRecordings = make(map[string]*exec.Cmd)
-	recordingFiles   = make(map[string]string)
+	stateMu             sync.Mutex
+	serverPort          int
+	recordingsMu        sync.Mutex
+	activeRecordings    = make(map[string]*exec.Cmd)
+	recordingFiles      = make(map[string]string)
+	customRecordingsDir string
+	customDirMu         sync.RWMutex
 )
 
 func getRecordingsDir() string {
+	customDirMu.RLock()
+	d := customRecordingsDir
+	customDirMu.RUnlock()
+	if d != "" {
+		_ = os.MkdirAll(d, 0755)
+		return d
+	}
 	home, err := os.UserHomeDir()
 	if err == nil && home != "" {
 		vids := filepath.Join(home, "Videos", "ProCam_Recordings")
@@ -101,6 +110,55 @@ func getRecordingsDir() string {
 	}
 	_ = os.MkdirAll("recordings", 0755)
 	return "recordings"
+}
+
+func setRecordingsDir(d string) {
+	customDirMu.Lock()
+	defer customDirMu.Unlock()
+	d = strings.TrimSpace(d)
+	if d != "" {
+		_ = os.MkdirAll(d, 0755)
+		customRecordingsDir = d
+	}
+}
+
+func selectFolderDialog() (string, error) {
+	if runtime.GOOS == "windows" {
+		psScript := `Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = 'Выберите папку для сохранения архива ProCam VMS'; if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }`
+		cmd := exec.Command("powershell", "-NoProfile", "-Command", psScript)
+		out, err := cmd.Output()
+		if err != nil {
+			return "", err
+		}
+		path := strings.TrimSpace(string(out))
+		if path != "" {
+			return path, nil
+		}
+		return "", fmt.Errorf("выбор отменен")
+	}
+
+	if zPath, err := exec.LookPath("zenity"); err == nil {
+		cmd := exec.Command(zPath, "--file-selection", "--directory", "--title=Выберите папку для сохранения архива ProCam VMS")
+		out, err := cmd.Output()
+		if err == nil {
+			p := strings.TrimSpace(string(out))
+			if p != "" {
+				return p, nil
+			}
+		}
+	}
+	if kPath, err := exec.LookPath("kdialog"); err == nil {
+		cmd := exec.Command(kPath, "--getexistingdirectory", "--title", "Выберите папку для сохранения архива ProCam VMS")
+		out, err := cmd.Output()
+		if err == nil {
+			p := strings.TrimSpace(string(out))
+			if p != "" {
+				return p, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("диалог выбора папки не найден")
 }
 
 func withCORS(next http.HandlerFunc) http.HandlerFunc {
@@ -1712,6 +1770,209 @@ func main() {
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": true,
 			"dir":     recDir,
+		})
+	}))
+
+	// API: Get / Set Custom Recordings Directory
+	http.HandleFunc("/api/record/dir", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			var body struct {
+				Dir string `json:"dir"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err == nil && body.Dir != "" {
+				setRecordingsDir(body.Dir)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"dir":     getRecordingsDir(),
+		})
+	}))
+
+	// API: Native GUI Directory Picker Dialog
+	http.HandleFunc("/api/record/select-folder", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		p, err := selectFolderDialog()
+		w.Header().Set("Content-Type", "application/json")
+		if err != nil || p == "" {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "Диалог выбора папки отменен или недоступен",
+				"dir":     getRecordingsDir(),
+			})
+			return
+		}
+		setRecordingsDir(p)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"dir":     p,
+		})
+	}))
+
+	// API: Batch Download ZIP Archive of multiple files
+	http.HandleFunc("/api/record/download-zip", func(w http.ResponseWriter, r *http.Request) {
+		filesParam := r.URL.Query().Get("files")
+		if filesParam == "" {
+			http.Error(w, "Параметр 'files' обязателен", 400)
+			return
+		}
+		files := strings.Split(filesParam, ",")
+		recDir := getRecordingsDir()
+
+		zipName := fmt.Sprintf("procam_archive_%s.zip", time.Now().Format("20060102_150405"))
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, zipName))
+
+		zw := zip.NewWriter(w)
+		defer zw.Close()
+
+		for _, fname := range files {
+			cleanName := filepath.Base(strings.TrimSpace(fname))
+			if cleanName == "" || cleanName == "." {
+				continue
+			}
+			filePath := filepath.Join(recDir, cleanName)
+			f, err := os.Open(filePath)
+			if err != nil {
+				continue
+			}
+			wEntry, err := zw.Create(cleanName)
+			if err == nil {
+				_, _ = io.Copy(wEntry, f)
+			}
+			_ = f.Close()
+		}
+	})
+
+	// API: Delete recording files
+	http.HandleFunc("/api/record/delete", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Files []string `json:"files"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.Files) == 0 {
+			http.Error(w, "Invalid request", 400)
+			return
+		}
+		recDir := getRecordingsDir()
+		deleted := 0
+		for _, f := range req.Files {
+			cleanName := filepath.Base(strings.TrimSpace(f))
+			if cleanName != "" && cleanName != "." {
+				if err := os.Remove(filepath.Join(recDir, cleanName)); err == nil {
+					deleted++
+				}
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"deleted": deleted,
+		})
+	}))
+
+	// API: Batch Export NVR archive segments for multiple channels with custom time range
+	http.HandleFunc("/api/isapi/playback/batch-export", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			IP       string `json:"ip"`
+			User     string `json:"user"`
+			Pass     string `json:"pass"`
+			Channels []int  `json:"channels"`
+			Date     string `json:"date"`
+			Start    string `json:"start"`
+			End      string `json:"end"`
+			DestDir  string `json:"destDir"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.IP == "" || len(req.Channels) == 0 {
+			http.Error(w, "Invalid batch export request", 400)
+			return
+		}
+		if req.User == "" {
+			req.User = "admin"
+		}
+		if req.Date == "" {
+			req.Date = time.Now().Format("2006-01-02")
+		}
+		if req.Start == "" {
+			req.Start = "00:00:00"
+		}
+		if req.End == "" {
+			req.End = "23:59:59"
+		}
+
+		targetDir := req.DestDir
+		if targetDir == "" {
+			targetDir = getRecordingsDir()
+		} else {
+			_ = os.MkdirAll(targetDir, 0755)
+		}
+
+		cleanDate := strings.ReplaceAll(req.Date, "-", "")
+		normStart := req.Start
+		if len(req.Start) == 8 && strings.Count(req.Start, ":") == 2 {
+			normStart = fmt.Sprintf("%sT%sZ", cleanDate, strings.ReplaceAll(req.Start, ":", ""))
+		}
+		normEnd := req.End
+		if len(req.End) == 8 && strings.Count(req.End, ":") == 2 {
+			normEnd = fmt.Sprintf("%sT%sZ", cleanDate, strings.ReplaceAll(req.End, ":", ""))
+		}
+
+		ffmpegPath, err := findFFmpegPath()
+		if err != nil {
+			go autoInstallFFmpeg()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(503)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "FFmpeg не найден. Запущена авто-установка портативного ядра.",
+			})
+			return
+		}
+
+		type ExportResult struct {
+			Channel  int    `json:"channel"`
+			Filename string `json:"filename"`
+			Path     string `json:"path"`
+			URL      string `json:"url"`
+		}
+
+		results := make([]ExportResult, 0)
+		timestamp := time.Now().Format("20060102_150405")
+		safeIP := strings.ReplaceAll(req.IP, ".", "_")
+
+		for _, ch := range req.Channels {
+			filename := fmt.Sprintf("nvr_%s_ch%02d_%s.mp4", safeIP, ch, timestamp)
+			fullPath := filepath.Join(targetDir, filename)
+			rtspTrack := fmt.Sprintf("rtsp://%s:%s@%s:554/Streaming/tracks/%d01?starttime=%s&endtime=%s",
+				req.User, req.Pass, req.IP, ch, normStart, normEnd)
+
+			cmd := exec.Command(ffmpegPath,
+				"-rtsp_transport", "tcp",
+				"-i", rtspTrack,
+				"-c", "copy",
+				"-movflags", "+faststart",
+				"-y",
+				fullPath,
+			)
+			prepareBackgroundCmd(cmd)
+			go func() {
+				_ = cmd.Run()
+			}()
+
+			results = append(results, ExportResult{
+				Channel:  ch,
+				Filename: filename,
+				Path:     fullPath,
+				URL:      fmt.Sprintf("/api/record/file?name=%s", filename),
+			})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"count":   len(results),
+			"destDir": targetDir,
+			"files":   results,
+			"message": fmt.Sprintf("Экспорт %d каналов запущен в папку: %s", len(results), targetDir),
 		})
 	}))
 
