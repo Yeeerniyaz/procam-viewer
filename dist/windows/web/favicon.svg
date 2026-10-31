@@ -1,12 +1,60 @@
 <svg width="512" height="512" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- ProCam VMS — Клиентская станция видеонаблюдения, Видеостена & Архив NVR -->
+  <defs>
+    <linearGradient id="vmsGlow" x1="10" y1="10" x2="54" y2="54" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#10B981" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#60A5FA" stop-opacity="0.08"/>
+    </linearGradient>
+    <linearGradient id="cellBorder" x1="12" y1="12" x2="52" y2="52" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#3F3F46"/>
+      <stop offset="100%" stop-color="#27272A"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Base Badge -->
   <rect width="64" height="64" rx="15" fill="#09090B"/>
-  <path d="M11 15L23 21L32 14L41 21L53 15L55 34C55 46.5 44.5 54.5 32 57C19.5 54.5 9 46.5 9 34L11 15Z" fill="#18181B" stroke="#E4E4E7" stroke-width="2" stroke-linejoin="round"/>
-  <path d="M13 21L32 31L51 21" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="22" cy="34" r="7.5" fill="#09090B" stroke="#FFFFFF" stroke-width="2"/>
-  <circle cx="22" cy="34" r="3.5" fill="#09090B" stroke="#10B981" stroke-width="1.6"/>
-  <circle cx="23.5" cy="32.5" r="1.7" fill="#10B981"/>
-  <circle cx="42" cy="34" r="7.5" fill="#09090B" stroke="#FFFFFF" stroke-width="2"/>
-  <circle cx="42" cy="34" r="3.5" fill="#09090B" stroke="#10B981" stroke-width="1.6"/>
-  <circle cx="43.5" cy="32.5" r="1.7" fill="#10B981"/>
-  <path d="M32 37L28.5 44L32 50L35.5 44L32 37Z" fill="#E4E4E7"/>
+  <rect x="1" y="1" width="62" height="62" rx="14" stroke="#27272A" stroke-width="1.2"/>
+
+  <!-- Monitor Display Housing -->
+  <rect x="9" y="9" width="46" height="46" rx="8" fill="#0D111A" stroke="#27272A" stroke-width="1.5"/>
+
+  <!-- Matrix Cell 1 (Top-Left: Live Camera Feed with REC dot) -->
+  <rect x="12" y="12" width="18" height="18" rx="4" fill="#141926" stroke="#3F3F46" stroke-width="1"/>
+  <!-- Camera Lens Graphic in Cell 1 -->
+  <circle cx="21" cy="21" r="5" fill="#09090B" stroke="#E4E4E7" stroke-width="1.2"/>
+  <circle cx="21" cy="21" r="2.2" fill="#09090B" stroke="#10B981" stroke-width="1.2"/>
+  <circle cx="22" cy="20" r="0.9" fill="#10B981"/>
+  <!-- Live REC Dot (top-right of cell 1) -->
+  <circle cx="27" cy="15" r="1.3" fill="#EF4444"/>
+
+  <!-- Matrix Cell 2 (Top-Right: AI Detection Bounding Box) -->
+  <rect x="34" y="12" width="18" height="18" rx="4" fill="#141926" stroke="#3F3F46" stroke-width="1"/>
+  <!-- AI Target Bounding Corner Markers -->
+  <path d="M37 18 V15 H40" stroke="#10B981" stroke-width="1.2" stroke-linecap="round"/>
+  <path d="M49 18 V15 H46" stroke="#10B981" stroke-width="1.2" stroke-linecap="round"/>
+  <path d="M37 24 V27 H40" stroke="#10B981" stroke-width="1.2" stroke-linecap="round"/>
+  <path d="M49 24 V27 H46" stroke="#10B981" stroke-width="1.2" stroke-linecap="round"/>
+  <!-- Person/Vehicle silhouette marker inside -->
+  <circle cx="43" cy="19" r="1.4" fill="#34D399"/>
+  <path d="M40 25 C40 22.5 46 22.5 46 25" stroke="#34D399" stroke-width="1.2" stroke-linecap="round"/>
+
+  <!-- Matrix Cell 3 (Bottom-Left: NVR Hard Disk Playback) -->
+  <rect x="12" y="34" width="18" height="18" rx="4" fill="#141926" stroke="#3F3F46" stroke-width="1"/>
+  <!-- NVR Disk Platter -->
+  <circle cx="21" cy="43" r="5.5" fill="#09090B" stroke="#60A5FA" stroke-width="1.2"/>
+  <circle cx="21" cy="43" r="2" fill="#09090B" stroke="#E4E4E7" stroke-width="1"/>
+  <!-- Playback Read Head Arrow -->
+  <path d="M21 40 L26 43 L21 46 Z" fill="#10B981"/>
+
+  <!-- Matrix Cell 4 (Bottom-Right: Video Timeline Stream Waves) -->
+  <rect x="34" y="34" width="18" height="18" rx="4" fill="#141926" stroke="#3F3F46" stroke-width="1"/>
+  <!-- Video Track Bars -->
+  <rect x="37" y="42" width="2" height="6" rx="0.8" fill="#10B981"/>
+  <rect x="40.5" y="39" width="2" height="9" rx="0.8" fill="#34D399"/>
+  <rect x="44" y="37" width="2" height="11" rx="0.8" fill="#60A5FA"/>
+  <rect x="47.5" y="40" width="2" height="8" rx="0.8" fill="#10B981"/>
+
+  <!-- Center Hub Matrix Diamond -->
+  <circle cx="32" cy="32" r="3" fill="#09090B" stroke="#FFFFFF" stroke-width="1.2"/>
+  <circle cx="32" cy="32" r="1.4" fill="#10B981"/>
 </svg>

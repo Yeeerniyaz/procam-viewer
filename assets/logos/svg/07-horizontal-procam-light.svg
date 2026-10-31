@@ -1,0 +1,48 @@
+<svg width="280" height="64" viewBox="0 0 280 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="vmsGlow" x1="10" y1="10" x2="54" y2="54" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#10B981" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#60A5FA" stop-opacity="0.08"/>
+    </linearGradient>
+    <linearGradient id="cellBorder" x1="12" y1="12" x2="52" y2="52" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#3F3F46"/>
+      <stop offset="100%" stop-color="#27272A"/>
+    </linearGradient></defs>
+  
+  <style>
+    .pro { font-family: 'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-weight: 900; letter-spacing: -0.03em; }
+    .cam { font-family: 'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-weight: 400; letter-spacing: -0.03em; }
+    .tag { font-family: 'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-weight: 900; letter-spacing: -0.02em; }
+    .sub { font-family: 'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
+  </style>
+  <g transform="translate(0, 0) scale(1.0)">
+  
+  <rect width="64" height="64" rx="15" fill="#09090B"/>
+  <rect x="1" y="1" width="62" height="62" rx="14" stroke="#27272A" stroke-width="1.2"/>
+  <rect x="9" y="9" width="46" height="46" rx="8" fill="#0D111A" stroke="#27272A" stroke-width="1.5"/>
+  <rect x="12" y="12" width="18" height="18" rx="4" fill="#141926" stroke="#3F3F46" stroke-width="1"/>
+  <circle cx="21" cy="21" r="5" fill="#09090B" stroke="#E4E4E7" stroke-width="1.2"/>
+  <circle cx="21" cy="21" r="2.2" fill="#09090B" stroke="#10B981" stroke-width="1.2"/>
+  <circle cx="22" cy="20" r="0.9" fill="#10B981"/>
+  <circle cx="27" cy="15" r="1.3" fill="#EF4444"/>
+  <rect x="34" y="12" width="18" height="18" rx="4" fill="#141926" stroke="#3F3F46" stroke-width="1"/>
+  <path d="M37 18 V15 H40" stroke="#10B981" stroke-width="1.2" stroke-linecap="round"/>
+  <path d="M49 18 V15 H46" stroke="#10B981" stroke-width="1.2" stroke-linecap="round"/>
+  <path d="M37 24 V27 H40" stroke="#10B981" stroke-width="1.2" stroke-linecap="round"/>
+  <path d="M49 24 V27 H46" stroke="#10B981" stroke-width="1.2" stroke-linecap="round"/>
+  <circle cx="43" cy="19" r="1.4" fill="#34D399"/>
+  <path d="M40 25 C40 22.5 46 22.5 46 25" stroke="#34D399" stroke-width="1.2" stroke-linecap="round"/>
+  <rect x="12" y="34" width="18" height="18" rx="4" fill="#141926" stroke="#3F3F46" stroke-width="1"/>
+  <circle cx="21" cy="43" r="5.5" fill="#09090B" stroke="#60A5FA" stroke-width="1.2"/>
+  <circle cx="21" cy="43" r="2" fill="#09090B" stroke="#E4E4E7" stroke-width="1"/>
+  <path d="M21 40 L26 43 L21 46 Z" fill="#10B981"/>
+  <rect x="34" y="34" width="18" height="18" rx="4" fill="#141926" stroke="#3F3F46" stroke-width="1"/>
+  <rect x="37" y="42" width="2" height="6" rx="0.8" fill="#10B981"/>
+  <rect x="40.5" y="39" width="2" height="9" rx="0.8" fill="#34D399"/>
+  <rect x="44" y="37" width="2" height="11" rx="0.8" fill="#60A5FA"/>
+  <rect x="47.5" y="40" width="2" height="8" rx="0.8" fill="#10B981"/>
+  <circle cx="32" cy="32" r="3" fill="#09090B" stroke="#FFFFFF" stroke-width="1.2"/>
+  <circle cx="32" cy="32" r="1.4" fill="#10B981"/>
+  </g>
+  <text x="80" y="44" font-size="34"><tspan class="pro" fill="#09090B">PRO</tspan><tspan class="cam" fill="#52525B">CAM</tspan> <tspan class="tag" fill="#2563EB">VMS</tspan></text>
+</svg>
